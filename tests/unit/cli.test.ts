@@ -18,12 +18,10 @@ describe("buildCliProgram", () => {
     expect(program.commands.map((command) => command.name())).toEqual(
       expect.arrayContaining(["doctor", "pair", "status", "controller"])
     );
-    expect(program.commands.find((command) => command.name() === "controller")?.commands.map((command) => command.name())).toContain("start");
+    expect(program.commands.find((command) => command.name() === "controller")?.commands.map((command) => command.name())).toEqual(expect.arrayContaining(["start", "stop", "status"]));
 
     await expectCredentialGate(["pair", "--server", "http://127.0.0.1:4096"]);
-    const controller = buildCliProgram();
-    controller.exitOverride();
-    await expect(controller.parseAsync(["node", "swarmctl", "controller", "start"], { from: "node" })).rejects.toMatchObject({ code: "ORCA_NOT_CONFIGURED" });
+    await expectCredentialGate(["controller", "start"]);
   });
 
   test("rejects unknown commands with a nonzero Commander error", async () => {
@@ -40,5 +38,20 @@ describe("buildCliProgram", () => {
       { id: "abcdefghijk", title: "Orchestrator tab", model: { providerId: "openai", modelId: "gpt-5" } },
       { id: "plannersess", title: "Planner tab", model: { providerId: "anthropic", modelId: "claude" } }
     ])).toContain("1 | orchestrator | Orchestrator tab | abcdefgh | openai/gpt-5");
+  });
+
+  test("routes all controller lifecycle commands to configured handlers", async () => {
+    const calls: string[] = [];
+    const program = buildCliProgram({
+      controllerStart: async () => { calls.push("start"); },
+      controllerStop: async () => { calls.push("stop"); },
+      controllerStatus: async () => { calls.push("status"); }
+    });
+
+    await program.parseAsync(["node", "swarmctl", "controller", "start"], { from: "node" });
+    await program.parseAsync(["node", "swarmctl", "controller", "stop"], { from: "node" });
+    await program.parseAsync(["node", "swarmctl", "controller", "status"], { from: "node" });
+
+    expect(calls).toEqual(["start", "stop", "status"]);
   });
 });

@@ -15,6 +15,7 @@ import { installRoleProfiles } from "../roles/installer.js";
 import { requireVerifiedRoleProfileActivation } from "../roles/activation.js";
 import { roleProfiles } from "../roles/profiles.js";
 import { readControllerRuntime } from "../controller/runtime.js";
+import { controllerStatus, startController, stopController } from "../controller/main.js";
 
 export interface ServerCommandOptions {
   server?: string;
@@ -24,7 +25,9 @@ export interface CliHandlers {
   doctor(options: ServerCommandOptions): void | Promise<void>;
   pair(options: ServerCommandOptions): void | Promise<void>;
   status(): void | Promise<void>;
-  controllerStart(): void | Promise<void>;
+  controllerStart(options: { daemon?: boolean }): void | Promise<void>;
+  controllerStop(): void | Promise<void>;
+  controllerStatus(): void | Promise<void>;
 }
 
 export class OrcaNotConfiguredError extends Error {
@@ -38,12 +41,6 @@ export class OrcaNotConfiguredError extends Error {
 
 export function getVersion(): string {
   return packageJson.version;
-}
-
-function unconfigured(command: string): () => never {
-  return () => {
-    throw new OrcaNotConfiguredError(command);
-  };
 }
 
 export function buildCliProgram(handlers: Partial<CliHandlers> = {}): Command {
@@ -76,9 +73,55 @@ export function buildCliProgram(handlers: Partial<CliHandlers> = {}): Command {
     .description("manage the ORCA controller")
     .command("start")
     .description("start the ORCA controller")
-    .action(() => (handlers.controllerStart ?? unconfigured("controller start"))());
+    .option("--daemon", "run as a background daemon (not implemented)")
+    .action((options: { daemon?: boolean }) => (handlers.controllerStart ?? runConfiguredControllerStart)(options));
+
+  program
+    .commands.find((command) => command.name() === "controller")
+    ?.command("stop")
+    .description("stop the ORCA controller")
+    .action(() => (handlers.controllerStop ?? runConfiguredControllerStop)());
+
+  program
+    .commands.find((command) => command.name() === "controller")
+    ?.command("status")
+    .description("show authenticated controller status")
+    .action(() => (handlers.controllerStatus ?? runConfiguredControllerStatus)());
 
   return program;
+}
+
+async function runConfiguredControllerStart(options: { daemon?: boolean }): Promise<void> {
+  if (options.daemon) throw new Error("controller daemon mode is not implemented; run foreground mode without --daemon");
+  const projectRoot = process.cwd();
+  const connection = await resolveOpenCodeConnectionConfig();
+  const persistence = openPersistence(projectRoot);
+  try {
+    const roster = persistence.getCurrentRoster();
+    const controllerConnection = { ...connection, baseUrl: roster?.serverBaseUrl ?? connection.baseUrl };
+    const controller = await startController({ projectRoot, adapter: new RealOpenCodeAdapter(controllerConnection), persistence, version: getVersion() });
+    const shutdown = async (): Promise<void> => {
+      await controller.stop();
+      persistence.close();
+    };
+    process.once("SIGINT", () => { void shutdown(); });
+    process.once("SIGTERM", () => { void shutdown(); });
+    process.stdout.write(`Controller started at http://${controller.address.host}:${controller.address.port}\n`);
+  } catch (error) {
+    persistence.close();
+    throw error;
+  }
+}
+
+async function runConfiguredControllerStop(): Promise<void> {
+  const stopped = await stopController(process.cwd());
+  process.stdout.write(`${stopped ? "Controller stopping" : "No running controller; stale runtime state cleared"}\n`);
+}
+
+async function runConfiguredControllerStatus(): Promise<void> {
+  const status = await controllerStatus(process.cwd());
+  const details = status.running ? `\nOpenCode: ${status.opencodeHealthy ? "healthy" : "unhealthy"}\nBindings: ${status.bindingsCurrent ? `${status.bindingCount ?? 0} current` : "drift detected"}` : "";
+  process.stdout.write(`Controller: ${status.running ? "running" : "not running"}${details}\n`);
 }
 
 async function runConfiguredPair(options: ServerCommandOptions): Promise<void> {

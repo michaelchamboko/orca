@@ -23,7 +23,7 @@ describe("controller runtime metadata", () => {
     const workspace = runtimeWorkspace();
     writeFileSync(join(workspace, ".orca", "controller.json"), JSON.stringify({ schemaVersion: "1", pid: process.pid, processIdentity: "stale-identity", token: "not-logged", port: 9999 }));
 
-    expect(readControllerRuntime(workspace)).toEqual({ running: false, reason: "controller runtime verifier is unavailable" });
+    expect(readControllerRuntime(workspace)).toEqual({ running: false, reason: "no validated controller runtime metadata" });
   });
 });
 
