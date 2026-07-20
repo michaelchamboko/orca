@@ -31,7 +31,7 @@ Status checkboxes are maintained task-by-task as work is completed.
 - [x] Implement versioned CLI entrypoint
 - [x] Configure lint/typecheck/build/test scripts
 - [x] Run bootstrap verification commands
-- [ ] Commit foundation work
+- [x] Commit foundation work
 
 ## Task matrix reminders
 
