@@ -4,9 +4,9 @@ Status checkboxes are maintained task-by-task as work is completed.
 
 - [x] Inspect repository and conventions
 - [x] Task 1: Repository foundation and quality gates
-- [ ] Task 2: OpenCode compatibility spike
-- [ ] Task 3: Domain schemas and result validation
-- [ ] Task 4: Workflow state machine and approval policy
+- [x] Task 2: OpenCode compatibility spike
+- [x] Task 3: Domain schemas and result validation
+- [x] Task 4: Workflow state machine and approval policy
 - [ ] Task 5: SQLite persistence and transactional outbox
 - [ ] Task 6: Git baseline and workspace fingerprints
 - [ ] Task 7: OpenCode adapter and fake implementation
@@ -27,11 +27,18 @@ Status checkboxes are maintained task-by-task as work is completed.
 - [x] Created repository baseline directories
 - [x] Added package and tooling configuration
 - [x] Added bootstrap test and CLI version entrypoint
-- [ ] Run bootstrap test and observe initial failure
+- [x] Run bootstrap test and observe initial failure
 - [x] Implement versioned CLI entrypoint
 - [x] Configure lint/typecheck/build/test scripts
 - [x] Run bootstrap verification commands
 - [x] Commit foundation work
+
+## Task 2 progress
+
+- [x] Added integration metadata contract in `integrations/opencode/types.ts`
+- [x] Implemented `setupIntegrationEntry` and command registration helper in `integrations/opencode/generated-entry.ts`
+- [x] Added compatibility unit test `tests/unit/opencode-compatibility.test.ts`
+- [x] Captured compatibility evidence in `docs/opencode-compatibility.md`
 
 ## Task matrix reminders
 
