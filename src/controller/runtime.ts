@@ -1,4 +1,5 @@
-import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 
 export const CONTROLLER_HOST = "127.0.0.1";
@@ -18,12 +19,47 @@ export interface ControllerRuntimeState {
   reason: "no validated controller runtime metadata" | "controller runtime verifier is unavailable" | "controller runtime verification failed";
 }
 
+export interface ControllerStartClaim {
+  owner: string;
+  path: string;
+}
+
+export type TokenPermissionApplier = (path: string) => void;
+
+type ExecuteFile = (file: string, args: readonly string[], options: { windowsHide: boolean; stdio: "ignore" }) => unknown;
+type ErrnoLike = Error & { code?: string };
+
 export function controllerRuntimePath(projectRoot: string): string {
   return join(projectRoot, ".orca", "controller.json");
 }
 
 export function controllerTokenPath(projectRoot: string): string {
   return join(projectRoot, ".orca", "controller-token");
+}
+
+export function controllerStartLockPath(projectRoot: string): string {
+  return join(projectRoot, ".orca", "controller-start.lock");
+}
+
+export function claimControllerStart(projectRoot: string, owner: string): ControllerStartClaim {
+  const path = controllerStartLockPath(projectRoot);
+  try {
+    writeFileSync(path, JSON.stringify({ owner, pid: process.pid, createdAt: new Date().toISOString() }), { flag: "wx", mode: 0o600 });
+    return { owner, path };
+  } catch (error) {
+    if (!isExistsError(error) || !tryRemoveDeadClaim(path)) throw new Error("controller start is already in progress");
+    writeFileSync(path, JSON.stringify({ owner, pid: process.pid, createdAt: new Date().toISOString() }), { flag: "wx", mode: 0o600 });
+    return { owner, path };
+  }
+}
+
+export function releaseControllerStart(claim: ControllerStartClaim): void {
+  try {
+    const current = JSON.parse(readFileSync(claim.path, "utf8")) as { owner?: unknown };
+    if (current.owner === claim.owner) unlinkSync(claim.path);
+  } catch {
+    // The claim is already gone or unreadable; it cannot be safely removed by this owner.
+  }
 }
 
 export function readControllerRuntime(projectRoot: string): ControllerRuntimeState {
@@ -63,13 +99,22 @@ export async function verifyControllerRuntime(projectRoot: string): Promise<Cont
   return { running: false, reason: "controller runtime verification failed" };
 }
 
-export function writeControllerRuntime(projectRoot: string, metadata: ControllerRuntimeMetadata, token: string): void {
+export function writeControllerRuntime(projectRoot: string, metadata: ControllerRuntimeMetadata, token: string, applyPermissions: TokenPermissionApplier = restrictTokenPermissions): void {
   writeFileSync(controllerTokenPath(projectRoot), `${token}\n`, { mode: 0o600 });
-  try { chmodSync(controllerTokenPath(projectRoot), 0o600); } catch { /* Windows may not support POSIX file modes. */ }
+  try {
+    applyPermissions(controllerTokenPath(projectRoot));
+  } catch (error) {
+    rmSync(controllerTokenPath(projectRoot), { force: true });
+    throw error;
+  }
   writeFileSync(controllerRuntimePath(projectRoot), JSON.stringify(metadata), { mode: 0o600 });
 }
 
-export function removeControllerRuntime(projectRoot: string): void {
+export function removeControllerRuntime(projectRoot: string, expectedProcessIdentity?: string): void {
+  if (expectedProcessIdentity) {
+    const metadata = readControllerMetadata(projectRoot);
+    if (metadata && metadata.processIdentity !== expectedProcessIdentity) return;
+  }
   rmSync(controllerRuntimePath(projectRoot), { force: true });
   rmSync(controllerTokenPath(projectRoot), { force: true });
 }
@@ -87,4 +132,38 @@ function isRuntimeMetadata(value: unknown): value is ControllerRuntimeMetadata {
     && metadata.port === CONTROLLER_PORT
     && typeof metadata.version === "string" && metadata.version.length > 0
     && typeof metadata.createdAt === "string" && !Number.isNaN(Date.parse(metadata.createdAt));
+}
+
+export function restrictTokenPermissions(path: string, platform = process.platform, username = process.env.USERNAME, execute: ExecuteFile = executeFile): void {
+  if (platform === "win32") {
+    if (!username) throw new Error("cannot secure controller token: Windows username is unavailable");
+    execute("icacls.exe", [path, "/inheritance:r", "/grant:r", `${username}:(R,W)`], { windowsHide: true, stdio: "ignore" });
+    return;
+  }
+  try { chmodSync(path, 0o600); } catch { /* Some filesystems do not support POSIX permissions. */ }
+}
+
+function executeFile(file: string, args: readonly string[], options: { windowsHide: boolean; stdio: "ignore" }): void {
+  execFileSync(file, args, options);
+}
+
+function isExistsError(error: unknown): error is ErrnoLike {
+  return error instanceof Error && (error as ErrnoLike).code === "EEXIST";
+}
+
+function tryRemoveDeadClaim(path: string): boolean {
+  try {
+    const claim = JSON.parse(readFileSync(path, "utf8")) as { pid?: unknown };
+    if (!Number.isInteger(claim.pid) || typeof claim.pid !== "number") return false;
+    try {
+      process.kill(claim.pid, 0);
+      return false;
+    } catch (error) {
+      if (!(error instanceof Error) || (error as ErrnoLike).code !== "ESRCH") return false;
+    }
+    unlinkSync(path);
+    return true;
+  } catch {
+    return false;
+  }
 }

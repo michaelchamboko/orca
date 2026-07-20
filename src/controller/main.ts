@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 
 import type { OpenCodeLiveAdapter } from "../integrations/opencode/adapter.js";
@@ -10,10 +11,12 @@ import { createControllerApi } from "./api.js";
 import {
   CONTROLLER_HOST,
   CONTROLLER_PORT,
+  claimControllerStart,
   controllerTokenPath,
   hasControllerRuntime,
   readControllerMetadata,
   removeControllerRuntime,
+  releaseControllerStart,
   verifyControllerRuntime,
   writeControllerRuntime,
   type ControllerRuntimeMetadata
@@ -81,28 +84,31 @@ export async function controllerStatus(projectRoot: string): Promise<ControllerS
 
 export async function startController(options: StartControllerOptions): Promise<RunningController> {
   if (options.port !== undefined && options.port !== CONTROLLER_PORT) throw new Error(`controller must bind ${CONTROLLER_HOST}:${CONTROLLER_PORT}`);
-  await rejectOrCleanRuntime(options.projectRoot);
-  await validateStartup(options);
+  const claim = claimControllerStart(options.projectRoot, randomUUID());
+  let api: FastifyInstance | undefined;
+  let metadata: ControllerRuntimeMetadata | undefined;
+  try {
+    await rejectOrCleanRuntime(options.projectRoot);
+    await validateStartup(options);
 
-  const roster = await new RosterService(options.adapter, options.persistence).assertCurrent();
-  const token = generateBearerToken();
-  const metadata: ControllerRuntimeMetadata = {
+    const roster = await new RosterService(options.adapter, options.persistence).assertCurrent();
+    const token = generateBearerToken();
+    metadata = {
     schemaVersion: 1,
     pid: process.pid,
     processIdentity: randomUUID(),
     port: CONTROLLER_PORT,
     version: options.version,
     createdAt: new Date().toISOString()
-  };
-  let stopped = false;
-  let api: FastifyInstance;
-  const stop = async (): Promise<void> => {
-    if (stopped) return;
-    stopped = true;
-    await api.close();
-    removeControllerRuntime(options.projectRoot);
-  };
-  api = createControllerApi({
+    };
+    let stopped = false;
+    const stop = async (): Promise<void> => {
+      if (stopped) return;
+      stopped = true;
+      await api?.close();
+      removeControllerRuntime(options.projectRoot, metadata?.processIdentity);
+    };
+    api = createControllerApi({
     token,
     metadata,
     roster,
@@ -112,15 +118,16 @@ export async function startController(options: StartControllerOptions): Promise<
       bindingsCurrent: await new RosterService(options.adapter, options.persistence).assertCurrent().then(() => true).catch(() => false)
     })
   });
-  try {
     await api.listen({ host: CONTROLLER_HOST, port: CONTROLLER_PORT });
     writeControllerRuntime(options.projectRoot, metadata, token);
+    return { api, token, address: { host: CONTROLLER_HOST, port: CONTROLLER_PORT }, stop };
   } catch (error) {
-    await api.close();
-    removeControllerRuntime(options.projectRoot);
+    await api?.close();
+    if (metadata) removeControllerRuntime(options.projectRoot, metadata.processIdentity);
     throw error;
+  } finally {
+    releaseControllerStart(claim);
   }
-  return { api, token, address: { host: CONTROLLER_HOST, port: CONTROLLER_PORT }, stop };
 }
 
 async function rejectOrCleanRuntime(projectRoot: string): Promise<void> {
@@ -138,6 +145,13 @@ async function validateStartup(options: StartControllerOptions): Promise<void> {
   for (const profile of roleProfiles) {
     const binding = roster.bindings.find((candidate) => candidate.position === profile.position && candidate.role === profile.role);
     if (!binding?.model.providerId || !binding.model.modelId) throw new Error("roster drift");
-    if (!existsSync(`${options.projectRoot}/.opencode/agents/orca-${profile.role}.md`)) throw new Error(`missing ORCA role profile: ${profile.role}`);
+    const profilePath = `${options.projectRoot}/.opencode/agents/orca-${profile.role}.md`;
+    if (!existsSync(profilePath)) throw new Error(`missing ORCA role profile: ${profile.role}`);
+    const profileHash = createHash("sha256").update(JSON.stringify({ mode: profile.mode, tools: profile.tools, instructions: profile.instructions })).digest("hex");
+    if (readFileSync(profilePath, "utf8") !== renderProfile(profile) || binding.rolePromptHash !== profileHash) throw new Error(`ORCA role profile mismatch: ${profile.role}`);
   }
+}
+
+function renderProfile(profile: (typeof roleProfiles)[number]): string {
+  return `---\ndescription: ORCA ${profile.role} role\nmode: ${profile.mode}\ntools:\n${profile.tools.map((tool) => `  ${tool}: true`).join("\n")}\n---\n\n${profile.instructions}\n`;
 }

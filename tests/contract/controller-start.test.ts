@@ -9,6 +9,8 @@ import type { PairedRoster } from "../../src/domain/types.js";
 import type { OpenCodeLiveAdapter } from "../../src/integrations/opencode/adapter.js";
 import type { OpenCodeEvent, OpenCodeSession, SessionPrompt, SessionStatus } from "../../src/integrations/opencode/types.js";
 import { RosterService } from "../../src/pairing/roster-service.js";
+import { renderRoleProfile } from "../../src/roles/installer.js";
+import { roleProfiles } from "../../src/roles/profiles.js";
 
 const workspaces: string[] = [];
 const controllers: Array<{ stop(): Promise<void> }> = [];
@@ -75,6 +77,38 @@ describe("authenticated controller startup", () => {
     expect(existsSync(join(setup.projectRoot, ".orca", "controller.json"))).toBe(false);
   });
 
+  it("refuses a modified, skeletal, or otherwise mismatched ORCA profile", async () => {
+    const setup = controllerSetup();
+    await setup.rosterService.pair();
+    writeFileSync(join(setup.projectRoot, ".opencode", "agents", "orca-builder.md"), "---\nmode: primary\n---\nwrong profile\n");
+
+    await expect(startController(setup.options)).rejects.toThrow("ORCA role profile mismatch: builder");
+    expect(existsSync(join(setup.projectRoot, ".orca", "controller.json"))).toBe(false);
+  });
+
+  it("refuses a roster whose persisted role-profile fingerprint no longer matches", async () => {
+    const setup = controllerSetup();
+    const roster = await setup.rosterService.pair();
+    roster.bindings[2].rolePromptHash = "tampered-profile-hash";
+    setup.persistence.saveRoster(roster);
+
+    await expect(startController(setup.options)).rejects.toThrow("ORCA role profile mismatch: builder");
+  });
+
+  it("preserves the winning runtime when concurrent starts race for the controller port", async () => {
+    const setup = controllerSetup();
+    await setup.rosterService.pair();
+
+    const results = await Promise.allSettled([startController(setup.options), startController(setup.options)]);
+    const winner = results.find((result): result is PromiseFulfilledResult<Awaited<ReturnType<typeof startController>>> => result.status === "fulfilled")?.value;
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(winner).toBeDefined();
+    if (!winner) throw new Error("controller start race produced no winner");
+    expect(readFileSync(join(setup.projectRoot, ".orca", "controller-token"), "utf8").trim()).toBe(winner?.token);
+    controllers.push(winner);
+  });
+
   it("refuses to listen when authentication or OpenCode health fails", async () => {
     const setup = controllerSetup();
     setup.adapter.health = async () => { throw new Error("OpenCode authentication failed (401)"); };
@@ -97,12 +131,12 @@ function controllerSetup() {
   workspaces.push(projectRoot);
   mkdirSync(join(projectRoot, ".orca"));
   mkdirSync(join(projectRoot, ".opencode", "agents"), { recursive: true });
-  for (const role of ["orchestrator", "planner", "builder", "reviewer", "tester"]) writeFileSync(join(projectRoot, ".opencode", "agents", `orca-${role}.md`), "---\nmode: primary\n---\n");
+  for (const profile of roleProfiles) writeFileSync(join(projectRoot, ".opencode", "agents", `orca-${profile.role}.md`), renderRoleProfile(profile));
   const sessions = [1, 2, 3, 4, 5].map((position) => ({ id: `session-${position}`, position, serverBaseUrl: "http://127.0.0.1:4096", projectRoot, model: { providerId: "openai", modelId: "gpt-5" }, title: `Session ${position}`, status: "idle", inFlightToolCalls: 0 }));
   const adapter = new MutableAdapter(sessions);
   const persistence = new MemoryPersistence();
   const rosterService = new RosterService(adapter, persistence);
-  return { projectRoot, sessions, adapter, rosterService, options: { projectRoot, adapter, persistence, version: "0.1.0" } };
+  return { projectRoot, sessions, adapter, persistence, rosterService, options: { projectRoot, adapter, persistence, version: "0.1.0" } };
 }
 
 class MemoryPersistence {
