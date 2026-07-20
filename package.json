@@ -1,0 +1,43 @@
+{
+  "name": "opencode-orchestration",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.0.0",
+  "scripts": {
+    "build": "tsup",
+    "dev": "pnpm run build --watch",
+    "lint": "eslint .",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest",
+    "test:unit": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration --passWithNoTests",
+    "test:contract": "vitest run tests/contract --passWithNoTests",
+    "test:e2e:fake": "vitest run tests/e2e --passWithNoTests",
+    "test:e2e:real": "vitest run tests/e2e:real --passWithNoTests",
+    "test:coverage": "vitest run --coverage",
+    "verify": "pnpm run lint && pnpm run typecheck && pnpm run test:unit && pnpm run test:integration && pnpm run test:contract && pnpm run test:e2e:fake && pnpm run build",
+    "swarmctl": "node dist/cli/index.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.10.0",
+    "commander": "^12.1.0",
+    "execa": "^9.4.0",
+    "fastify": "^4.29.0",
+    "pino": "^9.4.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@typescript-eslint/eslint-plugin": "^8.23.0",
+    "@typescript-eslint/parser": "^8.23.0",
+    "eslint-import-resolver-typescript": "^3.8.3",
+    "eslint": "^9.20.0",
+    "eslint-config-prettier": "^10.0.0",
+    "eslint-plugin-import": "^2.31.0",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8",
+    "@vitest/coverage-v8": "^2.1.8"
+  }
+}
