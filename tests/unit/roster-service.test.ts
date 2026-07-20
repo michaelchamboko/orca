@@ -46,6 +46,19 @@ describe("RosterService", () => {
 
     await expect(service.assertCurrent()).rejects.toThrow("roster drift");
   });
+
+  it("rejects closed sessions while pairing", async () => {
+    adapter.replaceSession({ ...session("s-4", 4), status: "closed" });
+
+    await expect(service.pair()).rejects.toThrow("active sessions");
+  });
+
+  it("reports roster drift when a paired session closes", async () => {
+    await service.pair();
+    adapter.replaceSession({ ...session("s-4", 4), status: "closed" });
+
+    await expect(service.assertCurrent()).rejects.toThrow("roster drift");
+  });
 });
 
 function session(id: string, position: number): OpenCodeSession {

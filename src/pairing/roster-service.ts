@@ -48,10 +48,17 @@ function validateSessions(sessions: readonly OpenCodeSession[]): OpenCodeSession
   const positions = new Set(sessions.map((session) => session.position));
   const roots = new Set(sessions.map((session) => session.projectRoot));
   const servers = new Set(sessions.map((session) => session.serverBaseUrl));
+  if (!sessions.every(isActiveSession)) {
+    throw new Error("exactly five active sessions are required");
+  }
   if (sessions.length !== 5 || ids.size !== 5 || positions.size !== 5 || roots.size !== 1 || servers.size !== 1 || !roleProfiles.every((profile) => positions.has(profile.position))) {
     throw new Error("exactly five unique sessions are required");
   }
   return [...sessions].sort((left, right) => left.position - right.position);
+}
+
+function isActiveSession(session: OpenCodeSession): boolean {
+  return session.status !== "closed" && session.status !== "inactive";
 }
 
 function bindingFor(session: OpenCodeSession, index: number, pairedAt: string): SessionBinding {
