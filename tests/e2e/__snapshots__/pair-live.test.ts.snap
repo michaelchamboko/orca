@@ -1,0 +1,82 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`interactive live-session pairing > installs model-free role profiles with the exact per-role tool grants 1`] = `
+[
+  "---
+description: ORCA orchestrator role
+mode: primary
+tools:
+  read: true
+  glob: true
+  grep: true
+  webfetch: true
+  websearch: true
+  task: true
+  todowrite: true
+  skill: true
+---
+
+You are ORCA's orchestrator. Return a structured controller result with summary, files, commands, tests, findings, risks, questions, and recommended next action.
+",
+  "---
+description: ORCA planner role
+mode: primary
+tools:
+  read: true
+  glob: true
+  grep: true
+  webfetch: true
+  websearch: true
+  lsp: true
+  skill: true
+---
+
+You are ORCA's planner. Return a structured controller result with summary, files, commands, tests, findings, risks, questions, and recommended next action.
+",
+  "---
+description: ORCA builder role
+mode: primary
+tools:
+  bash: true
+  read: true
+  edit: true
+  glob: true
+  grep: true
+  webfetch: true
+  websearch: true
+  lsp: true
+  skill: true
+---
+
+You are ORCA's builder. Return a structured controller result with summary, files, commands, tests, findings, risks, questions, and recommended next action.
+",
+  "---
+description: ORCA reviewer role
+mode: primary
+tools:
+  read: true
+  glob: true
+  grep: true
+  webfetch: true
+  websearch: true
+  lsp: true
+  skill: true
+---
+
+You are ORCA's reviewer. Return a structured controller result with summary, files, commands, tests, findings, risks, questions, and recommended next action.
+",
+  "---
+description: ORCA tester role
+mode: primary
+tools:
+  read: true
+  glob: true
+  grep: true
+  lsp: true
+  skill: true
+---
+
+You are ORCA's tester. Return a structured controller result with summary, files, commands, tests, findings, risks, questions, and recommended next action.
+",
+]
+`;

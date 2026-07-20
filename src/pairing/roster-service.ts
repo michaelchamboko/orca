@@ -15,6 +15,16 @@ export class RosterService {
 
   public async pair(): Promise<PairedRoster> {
     const orderedSessions = validateSessions(await this.adapter.listSessions());
+    return this.saveSelected(orderedSessions);
+  }
+
+  public async pairSelected(sessions: readonly OpenCodeSession[]): Promise<PairedRoster> {
+    validateSelectedSessions(sessions);
+    return this.saveSelected(sessions);
+  }
+
+  private saveSelected(selectedSessions: readonly OpenCodeSession[]): PairedRoster {
+    const orderedSessions = [...selectedSessions];
     const pairedAt = new Date().toISOString();
     const fingerprint = fingerprintFor(orderedSessions);
     const roster: PairedRoster = {
@@ -33,7 +43,9 @@ export class RosterService {
     const roster = this.persistence.getCurrentRoster();
     if (!roster) throw new Error("no paired roster");
     try {
-      if (fingerprintFor(validateSessions(await this.adapter.listSessions())) !== roster.fingerprint) {
+      const live = await this.adapter.listSessions();
+      const selected = roster.bindings.map((binding) => live.find((session) => session.id === binding.sessionId)).filter((session): session is OpenCodeSession => Boolean(session));
+      if (selected.length !== roster.bindings.length || fingerprintFor(selected) !== roster.fingerprint || selected.some((session) => session.status === "closed" || session.status === "inactive")) {
         throw new Error("fingerprint differs");
       }
     } catch {
@@ -57,6 +69,15 @@ function validateSessions(sessions: readonly OpenCodeSession[]): OpenCodeSession
   return [...sessions].sort((left, right) => left.position - right.position);
 }
 
+function validateSelectedSessions(sessions: readonly OpenCodeSession[]): void {
+  const ids = new Set(sessions.map((session) => session.id));
+  const roots = new Set(sessions.map((session) => session.projectRoot));
+  const servers = new Set(sessions.map((session) => session.serverBaseUrl));
+  if (sessions.length !== roleProfiles.length || ids.size !== sessions.length || roots.size !== 1 || servers.size !== 1 || !sessions.every(isActiveSession) || sessions.some((session) => !session.model.providerId || !session.model.modelId || session.model.providerId === "unknown" || session.model.modelId === "unknown")) {
+    throw new Error("exactly five unique active sessions with models are required");
+  }
+}
+
 function isActiveSession(session: OpenCodeSession): boolean {
   return session.status !== "closed" && session.status !== "inactive";
 }
@@ -74,13 +95,13 @@ function bindingFor(session: OpenCodeSession, index: number, pairedAt: string): 
     serverBaseUrl: session.serverBaseUrl,
     sessionCreatedAt: pairedAt,
     pairedAt,
-    rolePromptHash: sha256(JSON.stringify(profile.capabilities)),
+    rolePromptHash: sha256(JSON.stringify({ mode: profile.mode, tools: profile.tools, instructions: profile.instructions })),
     expectedTitle: session.title
   };
 }
 
 function fingerprintFor(sessions: readonly OpenCodeSession[]): string {
-  const ordered = [...sessions].sort((left, right) => left.position - right.position);
+  const ordered = [...sessions];
   return sha256(JSON.stringify({
     serverBaseUrl: ordered[0]?.serverBaseUrl,
     projectRoot: ordered[0]?.projectRoot,

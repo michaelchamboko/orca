@@ -24,6 +24,7 @@ export interface OpenCodeSession {
   title: string;
   status: string;
   inFlightToolCalls: number;
+  lastActivity?: string;
 }
 
 export interface SessionStatus {
