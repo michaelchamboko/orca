@@ -2,7 +2,7 @@ import { Command } from "commander";
 import packageJson from "../../package.json" with { type: "json" };
 import { fileURLToPath } from "node:url";
 import { runConfiguredDoctor } from "./doctor.js";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { resolveOpenCodeConnectionConfig } from "../config/opencode-auth.js";
@@ -14,6 +14,7 @@ import { SqlitePersistence } from "../persistence/sqlite.js";
 import { installRoleProfiles } from "../roles/installer.js";
 import { requireVerifiedRoleProfileActivation } from "../roles/activation.js";
 import { roleProfiles } from "../roles/profiles.js";
+import { readControllerRuntime } from "../controller/runtime.js";
 
 export interface ServerCommandOptions {
   server?: string;
@@ -86,8 +87,7 @@ async function runConfiguredPair(options: ServerCommandOptions): Promise<void> {
   const adapter = new RealOpenCodeAdapter(connection);
   const readline = createInterface({ input: process.stdin, output: process.stdout });
   try {
-    installRoleProfiles(projectRoot);
-    requireVerifiedRoleProfileActivation();
+    requireVerifiedRoleProfileActivation(installRoleProfiles(projectRoot));
     const selected = await selectFiveSessions(await adapter.listSessions(), projectRoot, (question) => readline.question(question), (line) => process.stdout.write(`${line}\n`));
     process.stdout.write(`${formatPairConfirmation(selected)}\n`);
     if ((await readline.question("Confirm this exact roster before saving? [y/N] ")).trim().toLowerCase() !== "y") throw new Error("pairing cancelled");
@@ -117,7 +117,7 @@ async function runConfiguredStatus(): Promise<void> {
         adapter = undefined;
       }
     }
-    process.stdout.write(`${formatRosterStatus(await readRosterStatus(persistence, adapter, controllerRunning(projectRoot)))}\n`);
+    process.stdout.write(`${formatRosterStatus(await readRosterStatus(persistence, adapter, readControllerRuntime(projectRoot).running))}\n`);
   } finally {
     persistence.close();
   }
@@ -133,18 +133,6 @@ export function formatPairConfirmation(sessions: readonly { id: string; title: s
   return ["Position | Role | Title | Session ID | Model", ...sessions.map((session, index) => `${index + 1} | ${roleProfiles[index]?.role ?? "unknown"} | ${session.title} | ${session.id.slice(0, 8)} | ${session.model.providerId}/${session.model.modelId}`)].join("\n");
 }
 
-function controllerRunning(projectRoot: string): boolean {
-  const pidPath = join(projectRoot, ".orca", "controller.pid");
-  if (!existsSync(pidPath)) return false;
-  const pid = Number.parseInt(readFileSync(pidPath, "utf8").trim(), 10);
-  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return !(error instanceof Error && "code" in error && error.code === "ESRCH");
-  }
-}
 
 async function main(): Promise<void> {
   const program = buildCliProgram();

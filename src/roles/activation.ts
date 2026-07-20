@@ -5,6 +5,14 @@ export class RoleProfileReloadRequiredError extends Error {
   }
 }
 
-export function requireVerifiedRoleProfileActivation(): never {
-  throw new RoleProfileReloadRequiredError();
+interface ProfileInstallation {
+  change: "created" | "updated" | "unchanged";
+}
+
+export function requiresRoleProfileRestart(installed: readonly ProfileInstallation[]): boolean {
+  return installed.some((profile) => profile.change !== "unchanged");
+}
+
+export function requireVerifiedRoleProfileActivation(installed: readonly ProfileInstallation[]): void {
+  if (requiresRoleProfileRestart(installed)) throw new RoleProfileReloadRequiredError();
 }
