@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { buildCliProgram } from "../../src/cli/main.js";
+import { buildCliProgram, formatPairConfirmation } from "../../src/cli/main.js";
 
 async function expectCredentialGate(argv: string[]): Promise<void> {
   const program = buildCliProgram();
@@ -33,5 +33,12 @@ describe("buildCliProgram", () => {
     await expect(
       program.parseAsync(["node", "swarmctl", "missing-command"], { from: "node" })
     ).rejects.toMatchObject({ code: "commander.unknownCommand", exitCode: 1 });
+  });
+
+  test("prints role, title, short session ID, and model before confirmation", () => {
+    expect(formatPairConfirmation([
+      { id: "abcdefghijk", title: "Orchestrator tab", model: { providerId: "openai", modelId: "gpt-5" } },
+      { id: "plannersess", title: "Planner tab", model: { providerId: "anthropic", modelId: "claude" } }
+    ])).toContain("1 | orchestrator | Orchestrator tab | abcdefgh | openai/gpt-5");
   });
 });

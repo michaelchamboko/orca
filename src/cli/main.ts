@@ -2,16 +2,18 @@ import { Command } from "commander";
 import packageJson from "../../package.json" with { type: "json" };
 import { fileURLToPath } from "node:url";
 import { runConfiguredDoctor } from "./doctor.js";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { resolveOpenCodeConnectionConfig } from "../config/opencode-auth.js";
 import { RealOpenCodeAdapter } from "../integrations/opencode/real.js";
 import { selectFiveSessions } from "../pairing/interactive.js";
 import { RosterService } from "../pairing/roster-service.js";
-import { formatRosterStatus } from "../pairing/status.js";
+import { formatRosterStatus, readRosterStatus } from "../pairing/status.js";
 import { SqlitePersistence } from "../persistence/sqlite.js";
 import { installRoleProfiles } from "../roles/installer.js";
+import { requireVerifiedRoleProfileActivation } from "../roles/activation.js";
+import { roleProfiles } from "../roles/profiles.js";
 
 export interface ServerCommandOptions {
   server?: string;
@@ -85,8 +87,9 @@ async function runConfiguredPair(options: ServerCommandOptions): Promise<void> {
   const readline = createInterface({ input: process.stdin, output: process.stdout });
   try {
     installRoleProfiles(projectRoot);
+    requireVerifiedRoleProfileActivation();
     const selected = await selectFiveSessions(await adapter.listSessions(), projectRoot, (question) => readline.question(question), (line) => process.stdout.write(`${line}\n`));
-    process.stdout.write(`${preview(selected)}\n`);
+    process.stdout.write(`${formatPairConfirmation(selected)}\n`);
     if ((await readline.question("Confirm this exact roster before saving? [y/N] ")).trim().toLowerCase() !== "y") throw new Error("pairing cancelled");
     const persistence = openPersistence(projectRoot);
     try {
@@ -100,10 +103,21 @@ async function runConfiguredPair(options: ServerCommandOptions): Promise<void> {
   }
 }
 
-function runConfiguredStatus(): void {
-  const persistence = openPersistence(process.cwd());
+async function runConfiguredStatus(): Promise<void> {
+  const projectRoot = process.cwd();
+  const persistence = openPersistence(projectRoot);
   try {
-    process.stdout.write(`${formatRosterStatus({ roster: persistence.getCurrentRoster(), drift: "unknown", controllerRunning: false })}\n`);
+    const roster = persistence.getCurrentRoster();
+    let adapter: RealOpenCodeAdapter | undefined;
+    if (roster) {
+      try {
+        const connection = await resolveOpenCodeConnectionConfig({ baseUrl: roster.serverBaseUrl, interactive: false });
+        adapter = new RealOpenCodeAdapter(connection);
+      } catch {
+        adapter = undefined;
+      }
+    }
+    process.stdout.write(`${formatRosterStatus(await readRosterStatus(persistence, adapter, controllerRunning(projectRoot)))}\n`);
   } finally {
     persistence.close();
   }
@@ -115,8 +129,21 @@ function openPersistence(projectRoot: string): SqlitePersistence {
   return new SqlitePersistence({ path: join(directory, "orca.db") });
 }
 
-function preview(sessions: readonly { title: string; model: { providerId: string; modelId: string } }[]): string {
-  return ["Position | Session | Model", ...sessions.map((session, index) => `${index + 1} | ${session.title} | ${session.model.providerId}/${session.model.modelId}`)].join("\n");
+export function formatPairConfirmation(sessions: readonly { id: string; title: string; model: { providerId: string; modelId: string } }[]): string {
+  return ["Position | Role | Title | Session ID | Model", ...sessions.map((session, index) => `${index + 1} | ${roleProfiles[index]?.role ?? "unknown"} | ${session.title} | ${session.id.slice(0, 8)} | ${session.model.providerId}/${session.model.modelId}`)].join("\n");
+}
+
+function controllerRunning(projectRoot: string): boolean {
+  const pidPath = join(projectRoot, ".orca", "controller.pid");
+  if (!existsSync(pidPath)) return false;
+  const pid = Number.parseInt(readFileSync(pidPath, "utf8").trim(), 10);
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return !(error instanceof Error && "code" in error && error.code === "ESRCH");
+  }
 }
 
 async function main(): Promise<void> {

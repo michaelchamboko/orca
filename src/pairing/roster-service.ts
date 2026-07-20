@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 
 import type { PairedRoster, SessionBinding } from "../domain/types.js";
-import type { OpenCodeAdapter } from "../integrations/opencode/adapter.js";
 import type { OpenCodeSession } from "../integrations/opencode/types.js";
 import { roleProfiles } from "../roles/profiles.js";
 
@@ -10,8 +9,19 @@ export interface RosterPersistence {
   getCurrentRoster(): PairedRoster | null;
 }
 
+export interface RosterSessionLister {
+  listSessions(projectRoot?: string): Promise<OpenCodeSession[]>;
+}
+
+export class RosterConnectivityError extends Error {
+  constructor(cause: unknown) {
+    super("unable to verify the paired roster against OpenCode", { cause });
+    this.name = "RosterConnectivityError";
+  }
+}
+
 export class RosterService {
-  constructor(private readonly adapter: OpenCodeAdapter, private readonly persistence: RosterPersistence) {}
+  constructor(private readonly adapter: RosterSessionLister, private readonly persistence: RosterPersistence) {}
 
   public async pair(): Promise<PairedRoster> {
     const orderedSessions = validateSessions(await this.adapter.listSessions());
@@ -42,8 +52,13 @@ export class RosterService {
   public async assertCurrent(): Promise<PairedRoster> {
     const roster = this.persistence.getCurrentRoster();
     if (!roster) throw new Error("no paired roster");
+    let live: OpenCodeSession[];
     try {
-      const live = await this.adapter.listSessions();
+      live = await this.adapter.listSessions();
+    } catch (error) {
+      throw new RosterConnectivityError(error);
+    }
+    try {
       const selected = roster.bindings.map((binding) => live.find((session) => session.id === binding.sessionId)).filter((session): session is OpenCodeSession => Boolean(session));
       if (selected.length !== roster.bindings.length || fingerprintFor(selected) !== roster.fingerprint || selected.some((session) => session.status === "closed" || session.status === "inactive")) {
         throw new Error("fingerprint differs");

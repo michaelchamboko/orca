@@ -17,14 +17,14 @@ describe("RealOpenCodeAdapter", () => {
     const baseUrl = await fixture(async (request, response) => {
       expect(request.headers.authorization).toBe(authorization);
       if (request.url === "/global/health") return json(response, { healthy: true, version: "1.18.3" });
-      if (request.url === "/session?directory=C%3A%2Fworkspace") return json(response, [{ id: "s-1", title: "Planner", directory: "C:/workspace", time: { created: 1 }, model: { providerID: "openai", modelID: "gpt-5" } }]);
+      if (request.url === "/session?directory=C%3A%2Fworkspace") return json(response, [{ id: "s-1", title: "Planner", directory: "C:/workspace", time: { created: "2026-07-20T08:00:00.000Z", updated: "2026-07-20T09:00:00.000Z" }, model: { providerID: "openai", modelID: "gpt-5" } }]);
       response.statusCode = 404;
       response.end();
     });
     const adapter = new RealOpenCodeAdapter({ ...credentials, baseUrl });
 
     await expect(adapter.health()).resolves.toEqual({ healthy: true, version: "1.18.3" });
-    await expect(adapter.listSessions("C:/workspace")).resolves.toEqual([expect.objectContaining({ id: "s-1", projectRoot: "C:/workspace", model: { providerId: "openai", modelId: "gpt-5" } })]);
+    await expect(adapter.listSessions("C:/workspace")).resolves.toEqual([expect.objectContaining({ id: "s-1", projectRoot: "C:/workspace", lastActivity: "2026-07-20T09:00:00.000Z", model: { providerId: "openai", modelId: "gpt-5" } })]);
   });
 
   it("looks up a session model and dispatches prompts asynchronously", async () => {

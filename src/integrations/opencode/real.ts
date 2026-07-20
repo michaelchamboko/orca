@@ -139,7 +139,15 @@ function pathWithDirectory(path: string, directory: string | undefined): string 
 
 function toSession(value: unknown, index: number, baseUrl: string, projectRoot?: string): OpenCodeSession {
   const session = object(value);
-  return { id: string(session.id), position: (index + 1) as 1 | 2 | 3 | 4 | 5, serverBaseUrl: baseUrl, projectRoot: string(session.directory, projectRoot ?? ""), model: toModel(session), title: string(session.title), status: string(session.status, "idle"), inFlightToolCalls: number(session.inFlightToolCalls) };
+  return { id: string(session.id), position: (index + 1) as 1 | 2 | 3 | 4 | 5, serverBaseUrl: baseUrl, projectRoot: string(session.directory, projectRoot ?? ""), model: toModel(session), title: string(session.title), status: string(session.status, "idle"), inFlightToolCalls: number(session.inFlightToolCalls), lastActivity: sessionActivity(session) };
+}
+
+function sessionActivity(session: Record<string, unknown>): string | undefined {
+  const time = object(session.time);
+  const value = time.updated ?? time.created;
+  if (typeof value === "string") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return new Date(value).toISOString();
+  return undefined;
 }
 
 function toModel(value: unknown): ModelRef {
