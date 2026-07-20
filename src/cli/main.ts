@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import packageJson from "../../package.json" with { type: "json" };
 import { fileURLToPath } from "node:url";
+import { runConfiguredDoctor } from "./doctor.js";
 
 export interface ServerCommandOptions {
   server?: string;
@@ -44,7 +45,7 @@ export function buildCliProgram(handlers: Partial<CliHandlers> = {}): Command {
     .command("doctor")
     .description("check ORCA's OpenCode server connection")
     .option("--server <url>", "OpenCode server URL")
-    .action((options: ServerCommandOptions) => (handlers.doctor ?? unconfigured("doctor"))(options));
+    .action((options: ServerCommandOptions) => (handlers.doctor ?? ((doctorOptions: ServerCommandOptions) => runConfiguredDoctor(doctorOptions, getVersion())))(options));
 
   program
     .command("pair")
@@ -81,6 +82,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       return;
     }
 
-    throw error;
+    process.stderr.write(`${error instanceof Error ? error.message : "Unexpected CLI error"}\n`);
+    process.exitCode = 1;
   });
 }

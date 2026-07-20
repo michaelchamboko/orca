@@ -19,6 +19,12 @@ const config = [
         __dirname: "readonly",
         __filename: "readonly",
         Buffer: "readonly"
+        , AbortSignal: "readonly"
+        , AbortController: "readonly"
+        , TextDecoder: "readonly"
+        , RequestInit: "readonly"
+        , Response: "readonly"
+        , fetch: "readonly"
       },
       parserOptions: {
         ecmaVersion: "latest",

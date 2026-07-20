@@ -20,7 +20,6 @@ describe("buildCliProgram", () => {
     );
     expect(program.commands.find((command) => command.name() === "controller")?.commands.map((command) => command.name())).toContain("start");
 
-    await expectNotConfigured(["doctor", "--server", "http://127.0.0.1:4096"]);
     await expectNotConfigured(["pair", "--server", "http://127.0.0.1:4096"]);
     await expectNotConfigured(["status"]);
     await expectNotConfigured(["controller", "start"]);

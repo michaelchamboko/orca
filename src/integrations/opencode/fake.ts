@@ -1,8 +1,10 @@
 import type { OpenCodeAdapter } from "./adapter.js";
+import type { ModelRef } from "../../domain/types.js";
 import type {
   DeliveredTask,
   OpenCodeEvent,
   OpenCodeSession,
+  SessionPrompt,
   SessionStatus
 } from "./types.js";
 
@@ -21,8 +23,21 @@ export class FakeOpenCodeAdapter implements OpenCodeAdapter {
     }
   }
 
-  async listSessions(): Promise<OpenCodeSession[]> {
+  async health(): Promise<{ healthy: boolean }> {
+    return { healthy: true };
+  }
+
+  async listSessions(projectRoot?: string): Promise<OpenCodeSession[]> {
+    void projectRoot;
     return [...this.sessions.values()].map(copySession);
+  }
+
+  async getSessionModel(sessionId: string): Promise<ModelRef> {
+    return { ...this.requireSession(sessionId).model };
+  }
+
+  async sendPrompt(input: SessionPrompt): Promise<void> {
+    await this.deliverTask(input.sessionId, { taskId: "prompt", content: input.content });
   }
 
   async deliverTask(sessionId: string, task: DeliveredTask): Promise<void> {
@@ -43,6 +58,23 @@ export class FakeOpenCodeAdapter implements OpenCodeAdapter {
     this.listeners.add(listener);
 
     return () => this.listeners.delete(listener);
+  }
+
+  async *subscribeEvents(signal: AbortSignal): AsyncIterable<OpenCodeEvent> {
+    const events: OpenCodeEvent[] = [];
+    const stop = this.subscribe((event) => events.push(event));
+    try {
+      while (!signal.aborted) {
+        const event = events.shift();
+        if (event) {
+          yield event;
+          continue;
+        }
+        await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 1));
+      }
+    } finally {
+      stop();
+    }
   }
 
   emit(event: OpenCodeEvent): void {

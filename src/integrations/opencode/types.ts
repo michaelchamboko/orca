@@ -31,6 +31,13 @@ export interface SessionStatus {
   inFlightToolCalls: number;
 }
 
+export interface SessionPrompt {
+  sessionId: string;
+  content: string;
+  agent?: string;
+  model?: ModelRef;
+}
+
 export interface DeliveredTask {
   taskId: string;
   content: string;
