@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.0.0",
+  "bin": {
+    "swarmctl": "dist/cli.js"
+  },
   "scripts": {
     "build": "tsup",
     "dev": "pnpm run build --watch",
@@ -14,10 +17,10 @@
     "test:integration": "vitest run tests/integration --passWithNoTests",
     "test:contract": "vitest run tests/contract --passWithNoTests",
     "test:e2e:fake": "vitest run tests/e2e --passWithNoTests",
-    "test:e2e:real": "vitest run tests/e2e:real --passWithNoTests",
+    "test:e2e:real": "vitest run tests/e2e-real --passWithNoTests",
     "test:coverage": "vitest run --coverage",
     "verify": "pnpm run lint && pnpm run typecheck && pnpm run test:unit && pnpm run test:integration && pnpm run test:contract && pnpm run test:e2e:fake && pnpm run build",
-    "swarmctl": "node dist/cli/index.js"
+    "swarmctl": "node dist/cli.js"
   },
   "dependencies": {
     "better-sqlite3": "^11.10.0",
