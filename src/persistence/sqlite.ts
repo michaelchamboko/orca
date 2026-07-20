@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 
 import {
   MissionState,
+  PairedRoster,
   TaskEnvelope,
   TaskState
 } from "../domain/types.js";
@@ -277,6 +278,22 @@ export class SqlitePersistence {
     return row?.count ?? 0;
   }
 
+  public saveRoster(roster: PairedRoster): void {
+    this.runInTransaction(() => {
+      this.database.exec("DELETE FROM session_bindings; DELETE FROM rosters;");
+      this.database.prepare(`INSERT INTO rosters (roster_id, fingerprint, server_base_url, project_root, paired_at) VALUES (@rosterId, @fingerprint, @serverBaseUrl, @projectRoot, @pairedAt)`).run({ rosterId: roster.rosterId, fingerprint: roster.fingerprint, serverBaseUrl: roster.serverBaseUrl, projectRoot: roster.projectRoot, pairedAt: roster.pairedAt });
+      const statement = this.database.prepare(`INSERT INTO session_bindings (roster_id, position, role, session_id, model_provider_id, model_id, agent_name, project_root, project_fingerprint, server_base_url, session_created_at, paired_at, role_prompt_hash, expected_title) VALUES (@rosterId, @position, @role, @sessionId, @modelProviderId, @modelId, @agentName, @projectRoot, @projectFingerprint, @serverBaseUrl, @sessionCreatedAt, @pairedAt, @rolePromptHash, @expectedTitle)`);
+      for (const binding of roster.bindings) statement.run({ rosterId: roster.rosterId, position: binding.position, role: binding.role, sessionId: binding.sessionId, modelProviderId: binding.model.providerId, modelId: binding.model.modelId, agentName: binding.agentName, projectRoot: binding.projectRoot, projectFingerprint: binding.projectFingerprint, serverBaseUrl: binding.serverBaseUrl, sessionCreatedAt: binding.sessionCreatedAt, pairedAt: binding.pairedAt, rolePromptHash: binding.rolePromptHash, expectedTitle: binding.expectedTitle });
+    });
+  }
+
+  public getCurrentRoster(): PairedRoster | null {
+    const roster = this.database.prepare(`SELECT roster_id, fingerprint, server_base_url, project_root, paired_at FROM rosters ORDER BY paired_at DESC LIMIT 1`).get() as { roster_id: string; fingerprint: string; server_base_url: string; project_root: string; paired_at: string } | undefined;
+    if (!roster) return null;
+    const bindings = this.database.prepare(`SELECT position, role, session_id, model_provider_id, model_id, agent_name, project_root, project_fingerprint, server_base_url, session_created_at, paired_at, role_prompt_hash, expected_title FROM session_bindings WHERE roster_id = @rosterId ORDER BY position ASC`).all({ rosterId: roster.roster_id }) as Array<{ position: 1 | 2 | 3 | 4 | 5; role: Role; session_id: string; model_provider_id: string; model_id: string; agent_name: string; project_root: string; project_fingerprint: string; server_base_url: string; session_created_at: string; paired_at: string; role_prompt_hash: string; expected_title: string }>;
+    return { rosterId: roster.roster_id, fingerprint: roster.fingerprint, serverBaseUrl: roster.server_base_url, projectRoot: roster.project_root, pairedAt: roster.paired_at, bindings: bindings.map((binding) => ({ sessionId: binding.session_id, position: binding.position, role: binding.role, model: { providerId: binding.model_provider_id, modelId: binding.model_id }, agentName: binding.agent_name, projectRoot: binding.project_root, projectFingerprint: binding.project_fingerprint, serverBaseUrl: binding.server_base_url, sessionCreatedAt: binding.session_created_at, pairedAt: binding.paired_at, rolePromptHash: binding.role_prompt_hash, expectedTitle: binding.expected_title })) };
+  }
+
   public enqueueOutboxEvent(
     aggregateId: string,
     aggregateType: string,
@@ -417,6 +434,34 @@ export class SqlitePersistence {
         payload TEXT NOT NULL,
         created_at TEXT NOT NULL,
         published_at TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS rosters (
+        roster_id TEXT PRIMARY KEY,
+        fingerprint TEXT NOT NULL UNIQUE,
+        server_base_url TEXT NOT NULL,
+        project_root TEXT NOT NULL,
+        paired_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS session_bindings (
+        roster_id TEXT NOT NULL,
+        position INTEGER NOT NULL,
+        role TEXT NOT NULL,
+        session_id TEXT NOT NULL UNIQUE,
+        model_provider_id TEXT NOT NULL,
+        model_id TEXT NOT NULL,
+        agent_name TEXT NOT NULL,
+        project_root TEXT NOT NULL,
+        project_fingerprint TEXT NOT NULL,
+        server_base_url TEXT NOT NULL,
+        session_created_at TEXT NOT NULL,
+        paired_at TEXT NOT NULL,
+        role_prompt_hash TEXT NOT NULL,
+        expected_title TEXT NOT NULL,
+        PRIMARY KEY (roster_id, position),
+        UNIQUE (roster_id, role),
+        FOREIGN KEY (roster_id) REFERENCES rosters (roster_id) ON DELETE CASCADE
       );
 
       CREATE INDEX IF NOT EXISTS idx_tasks_mission_id

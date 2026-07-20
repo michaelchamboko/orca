@@ -21,6 +21,15 @@ export interface SessionBinding {
   expectedTitle: string;
 }
 
+export interface PairedRoster {
+  rosterId: string;
+  fingerprint: string;
+  serverBaseUrl: string;
+  projectRoot: string;
+  pairedAt: string;
+  bindings: SessionBinding[];
+}
+
 export type MissionState =
   | "planning"
   | "awaiting_plan_approval"
