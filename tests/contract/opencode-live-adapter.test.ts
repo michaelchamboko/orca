@@ -76,6 +76,15 @@ describe("RealOpenCodeAdapter", () => {
 
     await expect(adapter.health()).rejects.toThrow(/timed out/i);
   });
+
+  it("bounds a stalled event-stream handshake", async () => {
+    const baseUrl = await fixture(() => undefined);
+    const adapter = new RealOpenCodeAdapter({ ...credentials, baseUrl, timeoutMs: 25 });
+    const controller = new AbortController();
+
+    await expect(adapter.subscribeEvents(controller.signal)[Symbol.asyncIterator]().next()).rejects.toThrow(/timed out/i);
+    controller.abort();
+  });
 });
 
 async function fixture(handler: (request: IncomingMessage, response: ServerResponse) => void | Promise<void>): Promise<string> {

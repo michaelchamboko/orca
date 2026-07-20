@@ -39,3 +39,14 @@ The server at `127.0.0.1:4096` is reachable and correctly challenges unauthentic
 
 - The contract fixture tracks the published OpenCode server routes; exact session wire fields and real session count still need authenticated verification against the local OpenCode 1.18.3 server.
 - The existing persistence suite continues to skip four SQLite-native tests in this environment; `doctor` independently checks whether the native binding loads.
+
+## Event handshake follow-up
+
+Reviewer finding fixed: `/global/event` now uses an internal, cleared timeout only while the HTTP/SSE connection is being established. Once the response is connected, the caller-provided `AbortSignal` is the only lifetime control for stream reads.
+
+| Command | Exit | Result |
+| --- | ---: | --- |
+| `pnpm vitest run tests/contract/opencode-live-adapter.test.ts` (RED) | 124 | Stalled event handshake exceeded the command bound before the fix. |
+| `pnpm vitest run tests/unit/opencode-auth.test.ts tests/unit/doctor.test.ts tests/contract/opencode-live-adapter.test.ts` | 0 | 11 focused tests passed, including the new stalled-handshake case. |
+| `pnpm run typecheck` | 0 | Passed. |
+| `pnpm run lint` | 0 | Passed. |

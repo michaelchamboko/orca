@@ -63,7 +63,7 @@ export class RealOpenCodeAdapter implements OpenCodeLiveAdapter {
   }
 
   async *subscribeEvents(signal: AbortSignal): AsyncIterable<OpenCodeEvent> {
-    const response = await this.request("/global/event", {}, signal, false);
+    const response = await this.connectEventStream(signal);
     if (!response.body) return;
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -111,6 +111,24 @@ export class RealOpenCodeAdapter implements OpenCodeLiveAdapter {
     } catch (error) {
       if (timeoutSignal?.aborted && !externalSignal?.aborted) throw new OpenCodeTimeoutError();
       throw error;
+    }
+  }
+
+  private async connectEventStream(externalSignal: AbortSignal): Promise<Response> {
+    const handshake = new AbortController();
+    const timer = globalThis.setTimeout(() => handshake.abort(), this.timeoutMs);
+    try {
+      const response = await fetch(`${this.baseUrl}/global/event`, {
+        headers: { authorization: this.authorization },
+        signal: AbortSignal.any([externalSignal, handshake.signal])
+      });
+      if (!response.ok) throw new OpenCodeHttpError(response.status, "/global/event");
+      return response;
+    } catch (error) {
+      if (handshake.signal.aborted && !externalSignal.aborted) throw new OpenCodeTimeoutError();
+      throw error;
+    } finally {
+      globalThis.clearTimeout(timer);
     }
   }
 }
