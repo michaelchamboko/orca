@@ -58,6 +58,7 @@ export type TaskState =
   | "approved"
   | "rejected"
   | "timed_out"
+  | "blocked"
   | "failed"
   | "cancelled";
 

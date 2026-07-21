@@ -316,6 +316,8 @@ export class SqlitePersistence {
       result: input.result ? toJsonString(input.result) : null,
       timestamp
     });
+    this.database.prepare(`UPDATE tasks SET state = @state, updated_at = @timestamp WHERE task_id = @taskId`)
+      .run({ taskId: input.envelope.taskId, state, timestamp });
   }
 
   public saveTaskResult(taskId: string, state: TaskState, result: RoleWorkerResult): void {
@@ -367,6 +369,44 @@ export class SqlitePersistence {
   public getTaskExecutionByPromptMessageId(promptMessageId: string): TaskExecutionRecord | null {
     const row = this.database.prepare(`SELECT task_id FROM task_execution_metadata WHERE controller_prompt_message_id = @promptMessageId`).get({ promptMessageId }) as { task_id: string } | undefined;
     return row ? this.getTaskExecution(row.task_id) : null;
+  }
+
+  /** Only these states may be observed after a controller restart. */
+  public getTaskExecutionsForCompletion(): TaskExecutionRecord[] {
+    const rows = this.database.prepare(`
+      SELECT task_id FROM task_execution_metadata
+      WHERE state IN ('dispatched', 'running', 'result_contract_violation')
+      ORDER BY updated_at ASC
+    `).all() as Array<{ task_id: string }>;
+    return rows.map((row) => this.getTaskExecution(row.task_id)).filter((task): task is TaskExecutionRecord => Boolean(task));
+  }
+
+  public saveTaskExecutionOutput(taskId: string, workerOutputMessageId: string): void {
+    const info = this.database.prepare(`UPDATE task_execution_metadata
+      SET worker_output_message_id = @workerOutputMessageId, updated_at = @timestamp WHERE task_id = @taskId`)
+      .run({ taskId, workerOutputMessageId, timestamp: nowIso() });
+    if (info.changes !== 1) throw new Error(`task execution not found: ${taskId}`);
+  }
+
+  public blockTaskExecution(taskId: string, reason: string): void {
+    this.runInTransaction(() => {
+      const task = this.getTaskExecution(taskId);
+      if (!task) throw new Error(`task execution not found: ${taskId}`);
+      const timestamp = nowIso();
+      this.database.prepare(`UPDATE tasks SET state = 'blocked', updated_at = @timestamp WHERE task_id = @taskId`).run({ taskId, timestamp });
+      this.database.prepare(`UPDATE task_execution_metadata SET state = 'blocked', updated_at = @timestamp WHERE task_id = @taskId`).run({ taskId, timestamp });
+      this.setMissionFailure(task.missionId, reason);
+    });
+  }
+
+  public recordControllerEvent(taskId: string, eventType: string, payload: Record<string, JsonLike>): void {
+    this.runInTransaction(() => {
+      this.database.prepare(`INSERT INTO controller_event_ledger (task_id, event_type, payload, created_at)
+        VALUES (@taskId, @eventType, @payload, @createdAt)`).run({ taskId, eventType, payload: toJsonString(payload), createdAt: nowIso() });
+      this.database.prepare(`DELETE FROM controller_event_ledger WHERE id IN (
+        SELECT id FROM controller_event_ledger WHERE task_id = @taskId ORDER BY id DESC LIMIT -1 OFFSET 100
+      )`).run({ taskId });
+    });
   }
 
   public setTaskExecutionState(taskId: string, state: TaskState): void {
@@ -562,7 +602,8 @@ export class SqlitePersistence {
     const applied = new Set((this.database.prepare(`SELECT version FROM schema_migrations`).all() as Array<{ version: number }>).map((row) => row.version));
     const migrations = [
       { version: 1, sql: initialSchemaSql },
-      { version: 2, sql: liveWorkflowSchemaSql }
+      { version: 2, sql: liveWorkflowSchemaSql },
+      { version: 3, sql: completionRecoverySchemaSql }
     ];
     for (const migration of migrations) {
       if (applied.has(migration.version)) continue;
@@ -744,4 +785,16 @@ const liveWorkflowSchemaSql = `
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
+`;
+
+const completionRecoverySchemaSql = `
+  CREATE TABLE IF NOT EXISTS controller_event_ledger (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (task_id) REFERENCES tasks (task_id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_controller_event_ledger_task ON controller_event_ledger (task_id, id);
 `;

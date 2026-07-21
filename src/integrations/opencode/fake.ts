@@ -20,6 +20,7 @@ export class FakeOpenCodeAdapter implements OpenCodeLiveAdapter {
   private readonly promptLog: SessionPrompt[] = [];
   private readonly listeners = new Set<(event: OpenCodeEvent) => void>();
   private eventsAvailable = true;
+  private sessionStatusFailures = 0;
   private streamGeneration = 0;
   private afterSessionList: (() => void) | undefined;
 
@@ -78,6 +79,10 @@ export class FakeOpenCodeAdapter implements OpenCodeLiveAdapter {
   }
 
   async getSessionStatus(sessionId: string): Promise<SessionStatus> {
+    if (this.sessionStatusFailures > 0) {
+      this.sessionStatusFailures -= 1;
+      throw new Error("fake session status unavailable");
+    }
     const session = this.requireSession(sessionId);
 
     return {
@@ -137,6 +142,8 @@ export class FakeOpenCodeAdapter implements OpenCodeLiveAdapter {
   interruptEventStream(): void { this.streamGeneration += 1; }
 
   setEventStreamAvailable(available: boolean): void { this.eventsAvailable = available; }
+
+  failSessionStatus(count = 1): void { this.sessionStatusFailures = count; }
 
   prompts(): readonly SessionPrompt[] {
     return this.promptLog.map((prompt) => ({ ...prompt, model: { ...prompt.model } }));
