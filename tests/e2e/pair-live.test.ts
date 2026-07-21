@@ -17,12 +17,12 @@ afterEach(() => {
 });
 
 describe("interactive live-session pairing", () => {
-  it("installs model-free role profiles with the exact per-role tool grants", () => {
+  it("installs role profiles pinned to minimax-coding-plan/MiniMax-M3 with the exact per-role tool grants", () => {
     const workspace = workspacePath();
     const written = installRoleProfiles(workspace);
 
     expect(written.map((file) => file.content)).toMatchSnapshot();
-    for (const file of written) expect(file.content).not.toMatch(/model:/);
+    for (const file of written) expect(file.content).toMatch(/^model: minimax-coding-plan\/MiniMax-M3$/m);
     expect(roleProfiles.find((profile) => profile.role === "builder")?.tools).toContain("edit");
     expect(roleProfiles.filter((profile) => profile.role !== "builder").flatMap((profile) => profile.tools)).not.toEqual(expect.arrayContaining(["edit", "bash"]));
     expect(written.every((file) => file.content.includes("structured controller result"))).toBe(true);

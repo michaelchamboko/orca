@@ -2,13 +2,33 @@ import { describe, expect, test } from "vitest";
 
 import { buildCliProgram, formatPairConfirmation } from "../../src/cli/main.js";
 
-async function expectCredentialGate(argv: string[]): Promise<void> {
-  const program = buildCliProgram();
-  program.exitOverride();
+const CREDENTIAL_ENV_VARS = ["OPENCODE_SERVER_PASSWORD", "OPENCODE_SERVER_USERNAME", "OPENCODE_SERVER_URL"] as const;
 
-  await expect(
-    program.parseAsync(["node", "swarmctl", ...argv], { from: "node" })
-  ).rejects.toThrow("credentials are unavailable");
+function withoutCredentials<T>(fn: () => T): T {
+  const previous = new Map<string, string | undefined>();
+  for (const key of CREDENTIAL_ENV_VARS) {
+    previous.set(key, process.env[key]);
+    Reflect.deleteProperty(process.env, key);
+  }
+  try {
+    return fn();
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) Reflect.deleteProperty(process.env, key);
+      else process.env[key] = value;
+    }
+  }
+}
+
+async function expectCredentialGate(argv: string[]): Promise<void> {
+  await withoutCredentials(async () => {
+    const program = buildCliProgram();
+    program.exitOverride();
+
+    await expect(
+      program.parseAsync(["node", "swarmctl", ...argv], { from: "node" })
+    ).rejects.toThrow("credentials are unavailable");
+  });
 }
 
 describe("buildCliProgram", () => {
