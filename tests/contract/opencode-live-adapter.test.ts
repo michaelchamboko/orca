@@ -93,6 +93,13 @@ describe("RealOpenCodeAdapter", () => {
     await expect(adapter.getMessage("s-1", "m-1")).rejects.toMatchObject({ name: "OpenCodeEventError", message: expect.stringContaining("sessionID does not match") });
   });
 
+  it("rejects a fetched message whose identity differs from the requested message", async () => {
+    const baseUrl = await fixture((_request, response) => json(response, messageFor("s-1", "m-other")));
+    const adapter = new RealOpenCodeAdapter({ ...credentials, baseUrl });
+
+    await expect(adapter.getMessage("s-1", "m-1")).rejects.toMatchObject({ name: "OpenCodeEventError", message: expect.stringContaining("message ID does not match") });
+  });
+
   it("posts a correlated prompt with the paired model and does not update session configuration", async () => {
     const requests: Array<{ url: string | undefined; method: string | undefined; body?: unknown }> = [];
     const baseUrl = await fixture(async (request, response) => {
@@ -237,9 +244,9 @@ function sse(value: unknown): string {
   return `event: global\ndata: ${JSON.stringify(value)}\n\n`;
 }
 
-function messageFor(sessionID: string) {
+function messageFor(sessionID: string, id = "m-1") {
   return {
-    info: { id: "m-1", sessionID, role: "assistant", time: { created: "2026-07-21T12:00:00.000Z" } },
+    info: { id, sessionID, role: "assistant", time: { created: "2026-07-21T12:00:00.000Z" } },
     parts: []
   };
 }

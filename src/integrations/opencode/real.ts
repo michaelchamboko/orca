@@ -55,7 +55,7 @@ export class RealOpenCodeAdapter implements OpenCodeLiveAdapter {
   }
 
   async getMessage(sessionId: string, messageId: string): Promise<OpenCodeMessage> {
-    return requireMessageSession(sessionId, toMessage(await this.json<unknown>(`/session/${encodeURIComponent(sessionId)}/message/${encodeURIComponent(messageId)}`)));
+    return requireMessageId(messageId, requireMessageSession(sessionId, toMessage(await this.json<unknown>(`/session/${encodeURIComponent(sessionId)}/message/${encodeURIComponent(messageId)}`))));
   }
 
   async sendPrompt(input: SessionPrompt): Promise<void> {
@@ -212,6 +212,11 @@ function toMessage(value: unknown): OpenCodeMessage {
 
 function requireMessageSession(requestedSessionId: string, message: OpenCodeMessage): OpenCodeMessage {
   if (message.sessionId !== requestedSessionId) throw new OpenCodeEventError("Malformed OpenCode message response: sessionID does not match the requested session.");
+  return message;
+}
+
+function requireMessageId(requestedMessageId: string, message: OpenCodeMessage): OpenCodeMessage {
+  if (message.id !== requestedMessageId) throw new OpenCodeEventError("Malformed OpenCode message response: message ID does not match the requested message.");
   return message;
 }
 

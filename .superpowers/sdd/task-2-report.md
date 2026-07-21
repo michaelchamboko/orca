@@ -47,6 +47,28 @@ The contract tests cover documented message GET routes, limit forwarding, messag
 | `pnpm.cmd run lint` | PASS |
 | `pnpm.cmd run build` | PASS |
 
+## Follow-up message-detail identity fix evidence
+
+The detail-message route now rejects an upstream response whose normalized `id` differs from the requested `messageId`, after confirming the response belongs to the requested session.
+
+RED evidence:
+
+```text
+pnpm.cmd exec vitest run tests/contract/opencode-live-adapter.test.ts
+exit 1: 1 failure / 15 tests
+- getMessage("s-1", "m-1") resolved an upstream message with id "m-other"
+```
+
+GREEN and required verification:
+
+| Command | Result |
+| --- | --- |
+| `pnpm.cmd exec vitest run tests/contract/opencode-live-adapter.test.ts` | PASS — 1 file, 15 tests |
+| `pnpm.cmd run test:contract` | PASS — 3 files, 29 tests |
+| `pnpm.cmd run typecheck` | PASS |
+| `pnpm.cmd run lint` | PASS |
+| `pnpm.cmd run build` | PASS |
+
 `test:unit` prints the expected `unknown command 'missing-command'` line from its CLI negative-case test; the suite exits 0. PowerShell prints PSReadLine terminal-capability warnings before commands; they are host-profile noise and all required commands exit successfully.
 
 ## Scope and limitations
