@@ -23,7 +23,7 @@
     "swarmctl": "node dist/cli.js"
   },
   "dependencies": {
-    "better-sqlite3": "^11.10.0",
+    "better-sqlite3": "^12.11.1",
     "commander": "^12.1.0",
     "execa": "^9.4.0",
     "fastify": "^4.29.0",
