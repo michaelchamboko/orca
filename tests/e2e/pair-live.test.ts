@@ -25,7 +25,11 @@ describe("interactive live-session pairing", () => {
     for (const file of written) expect(file.content).not.toMatch(/^model:/m);
     expect(roleProfiles.find((profile) => profile.role === "orchestrator")?.tools).not.toContain("task");
     expect(roleProfiles.find((profile) => profile.role === "builder")?.tools).toEqual(expect.arrayContaining(["edit", "bash"]));
-    expect(roleProfiles.filter((profile) => profile.role !== "builder").flatMap((profile) => profile.tools)).not.toEqual(expect.arrayContaining(["edit", "bash"]));
+    for (const role of ["orchestrator", "planner", "reviewer", "tester"] as const) {
+      const tools = roleProfiles.find((profile) => profile.role === role)?.tools;
+      expect(tools).not.toContain("edit");
+      expect(tools).not.toContain("bash");
+    }
     expect(written.every((file) => file.content.includes("structured controller result"))).toBe(true);
   });
 
