@@ -158,6 +158,7 @@ class MemoryPersistence implements WorkflowPersistence {
   setMissionFailure(): void {}
   getMission() { return null; }
   saveControllerCheckpoint(): void {}
+  getControllerCheckpoint() { return null; }
 }
 
 class MutableAdapter implements OpenCodeLiveAdapter {

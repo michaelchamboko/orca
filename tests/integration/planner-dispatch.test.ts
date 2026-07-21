@@ -107,6 +107,21 @@ describe("Planner mission ingress", () => {
     expect(setup.persistence.getTaskExecutionByPromptMessageId(promptId)?.controllerPromptMessageId).toBe(promptId);
   });
 
+  it("dispatches a message missed after the first cutoff when the controller restarts", async () => {
+    const setup = await controllerSetup();
+    await setup.rosterService.pair();
+    const first = await startController(setup.options);
+    setup.adapter.addMessage(message("missed-before-stop", "session-1", new Date().toISOString(), "must survive restart"));
+    await first.stop();
+
+    const second = await startController(setup.options);
+    controllers.push(second);
+    await eventually(() => expect(setup.adapter.prompts()).toHaveLength(1));
+
+    expect(setup.persistence.getMissionCount()).toBe(1);
+    expect(setup.adapter.prompts()[0].content).toContain("must survive restart");
+  });
+
   it("recovers from SSE interruption through polling and stops background work", async () => {
     const setup = await controllerSetup();
     await setup.rosterService.pair();
@@ -140,6 +155,27 @@ describe("Planner mission ingress", () => {
     expect(setup.persistence.getMission(stableId("mission", roster.rosterId, "drift-objective"))?.state).toBe("blocked");
   });
 
+  it("notifies a retryable drift once and dispatches the same source after drift resolves", async () => {
+    const setup = await controllerSetup();
+    await setup.rosterService.pair();
+    const controller = await startController(setup.options);
+    controllers.push(controller);
+    setup.adapter.replaceSession({ ...setup.sessions[1], model: { providerId: "other", modelId: "changed" } });
+    setup.adapter.addMessage(message("retryable-drift", "session-1", new Date().toISOString(), "retry after drift"));
+    setup.adapter.emit({ type: "message.updated", sessionId: "session-1", messageId: "retryable-drift" });
+    await eventually(() => expect(setup.adapter.prompts()).toHaveLength(1));
+    await new Promise((resolve) => globalThis.setTimeout(resolve, 1_100));
+
+    expect(setup.persistence.getMissionCount()).toBe(0);
+    expect(setup.adapter.prompts()).toHaveLength(1);
+    setup.adapter.replaceSession(setup.sessions[1]);
+    setup.adapter.emit({ type: "message.updated", sessionId: "session-1", messageId: "retryable-drift" });
+    await eventuallyWithin(2_000, () => expect(setup.adapter.prompts()).toHaveLength(2));
+
+    expect(setup.persistence.getMissionCount()).toBe(1);
+    expect(setup.adapter.prompts()[1]).toMatchObject({ sessionId: "session-2", agent: "orca-planner" });
+  });
+
   it("acknowledges a pending Planner dispatch already correlated by prompt ID without resending", async () => {
     const setup = await controllerSetup();
     const roster = await setup.rosterService.pair();
@@ -149,7 +185,7 @@ describe("Planner mission ingress", () => {
       task: { envelope, targetSessionId: "session-2", controllerPromptMessageId: "prompt-recovery" },
       dispatch: { dispatchKey: "dispatch-recovery", targetRole: "planner", targetSessionId: "session-2", capturedModel: { providerId: "openai", modelId: "gpt-5" }, promptMessageId: "prompt-recovery" }
     });
-    setup.adapter.addMessage(message("prompt-recovery", "session-2", new Date().toISOString(), "[ORCA_DISPATCH:dispatch-recovery]"));
+    setup.adapter.addMessage(message("prompt-recovery-observed", "session-2", new Date().toISOString(), "[ORCA_DISPATCH:dispatch-recovery]", "assistant"));
 
     const controller = await startController(setup.options);
     controllers.push(controller);

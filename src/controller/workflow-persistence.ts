@@ -25,4 +25,5 @@ export interface WorkflowPersistence extends RosterPersistence {
   setMissionFailure(missionId: string, reason: string): void;
   getMission(missionId: string): import("../persistence/sqlite.js").MissionDataRecord | null;
   saveControllerCheckpoint(input: import("../persistence/sqlite.js").ControllerCheckpointInput): void;
+  getControllerCheckpoint(cursorKey: string): import("../persistence/sqlite.js").ControllerCheckpoint | null;
 }

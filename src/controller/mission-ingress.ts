@@ -21,11 +21,14 @@ export class MissionIngress {
   ) {}
 
   async processStartup(cutoff: Date): Promise<void> {
-    this.startupCutoff = cutoff;
     const roster = await this.rosterService.assertCurrent();
-    this.persistence.saveControllerCheckpoint({ cursorKey: "controller:mission-ingress-cutoff", rosterId: roster.rosterId, cursor: cutoff.toISOString(), payload: { kind: "startup_cutoff" } });
+    const cutoffKey = `controller:mission-ingress-cutoff:${roster.rosterId}`;
+    const persisted = this.persistence.getControllerCheckpoint(cutoffKey);
+    const persistedTime = persisted ? Date.parse(persisted.cursor) : Number.NaN;
+    this.startupCutoff = Number.isFinite(persistedTime) && persistedTime < cutoff.getTime() ? new Date(persistedTime) : cutoff;
+    this.persistence.saveControllerCheckpoint({ cursorKey: cutoffKey, rosterId: roster.rosterId, cursor: this.startupCutoff.toISOString(), payload: { kind: "startup_cutoff" } });
     const orchestrator = bindingFor(roster, "orchestrator");
-    for (const message of await this.adapter.listMessages(orchestrator.sessionId)) await this.process(message, cutoff);
+    for (const message of await this.adapter.listMessages(orchestrator.sessionId)) await this.process(message, this.startupCutoff);
   }
 
   async processEvent(sessionId: string | undefined, messageId: string | undefined): Promise<void> {
@@ -50,7 +53,7 @@ export class MissionIngress {
     const cutoff = historicalCutoff ?? this.startupCutoff;
     if (cutoff && Date.parse(message.createdAt) <= cutoff.getTime()) return;
     const objective = message.parts.filter((part) => part.type === "text" && typeof part.text === "string").map((part) => part.text ?? "").join("\n").trim();
-    if (!objective || objective.includes("[ORCA_DISPATCH:")) return;
+    if (!objective || objective.includes("[ORCA_DISPATCH:") || objective.includes("[ORCA_CORRELATION:")) return;
     let current: PairedRoster;
     try {
       current = await this.rosterService.assertCurrent();
@@ -95,8 +98,12 @@ export class MissionIngress {
   }
 
   private async explainBlockedIngress(message: OpenCodeMessage, orchestrator: PairedRoster["bindings"][number], explanation: string): Promise<void> {
-    this.persistence.saveControllerCheckpoint({ cursorKey: `controller:mission-ingress-blocked:${message.id}`, rosterId: this.persistence.getCurrentRoster()?.rosterId ?? null, cursor: new Date().toISOString(), payload: { outcome: "blocked", reason: explanation } });
-    await this.adapter.sendPrompt({ messageId: stableId("orca-explanation", this.persistence.getCurrentRoster()?.rosterId ?? "unpaired", message.id), sessionId: orchestrator.sessionId, agent: "orca-orchestrator", model: { ...orchestrator.model }, content: `${explanation}[ORCA_CORRELATION:${message.id}]` });
+    const rosterId = this.persistence.getCurrentRoster()?.rosterId ?? "unpaired";
+    const failureIdentity = stableId("ingress-failure", rosterId, explanation);
+    const cursorKey = `controller:mission-ingress-failure:${message.id}:${failureIdentity}`;
+    if (this.persistence.getControllerCheckpoint(cursorKey)) return;
+    this.persistence.saveControllerCheckpoint({ cursorKey, rosterId: rosterId === "unpaired" ? null : rosterId, cursor: new Date().toISOString(), payload: { outcome: "blocked", reason: explanation, failureIdentity } });
+    await this.adapter.sendPrompt({ messageId: stableId("orca-explanation", rosterId, `${message.id}:${failureIdentity}`), sessionId: orchestrator.sessionId, agent: "orca-orchestrator", model: { ...orchestrator.model }, content: `${explanation}[ORCA_CORRELATION:${message.id}]` });
   }
 }
 
