@@ -11,6 +11,7 @@ import type { OpenCodeEvent, OpenCodeSession, SessionPrompt, SessionStatus } fro
 import { RosterService } from "../../src/pairing/roster-service.js";
 import { renderRoleProfile } from "../../src/roles/installer.js";
 import { roleProfiles } from "../../src/roles/profiles.js";
+import type { WorkflowPersistence } from "../../src/controller/workflow-persistence.js";
 
 const workspaces: string[] = [];
 const controllers: Array<{ stop(): Promise<void> }> = [];
@@ -140,11 +141,21 @@ function controllerSetup() {
   return { projectRoot, sessions, adapter, persistence, rosterService, options: { projectRoot, adapter, persistence, version: "0.1.0" } };
 }
 
-class MemoryPersistence {
+class MemoryPersistence implements WorkflowPersistence {
   private roster: PairedRoster | null = null;
 
   saveRoster(roster: PairedRoster): void { this.roster = roster; }
   getCurrentRoster(): PairedRoster | null { return this.roster; }
+  createMissionTaskAndDispatch(): never { throw new Error("workflow persistence is not exercised by this startup fixture"); }
+  recordProcessedMessage(): boolean { return true; }
+  claimNextDispatch() { return null; }
+  acknowledgeDispatch(): void {}
+  releaseDispatch(): void {}
+  getPendingDispatches() { return []; }
+  getTaskExecutionByPromptMessageId() { return null; }
+  saveWorkspaceSnapshot(): never { throw new Error("workflow persistence is not exercised by this startup fixture"); }
+  setTaskExecutionState(): void {}
+  setMissionFailure(): void {}
 }
 
 class MutableAdapter implements OpenCodeLiveAdapter {

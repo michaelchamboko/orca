@@ -105,6 +105,7 @@ export interface CreateMissionTaskAndDispatchInput {
   mission: CreateMissionInput;
   task: Omit<TaskExecutionInput, "state" | "result">;
   dispatch: Omit<DispatchInput, "missionId">;
+  snapshot?: WorkspaceSnapshotInput;
   /** A narrow test/operation hook; errors here prove the enclosing write transaction rolls back. */
   beforeCommit?: () => void;
 }
@@ -363,6 +364,27 @@ export class SqlitePersistence {
     };
   }
 
+  public getTaskExecutionByPromptMessageId(promptMessageId: string): TaskExecutionRecord | null {
+    const row = this.database.prepare(`SELECT task_id FROM task_execution_metadata WHERE controller_prompt_message_id = @promptMessageId`).get({ promptMessageId }) as { task_id: string } | undefined;
+    return row ? this.getTaskExecution(row.task_id) : null;
+  }
+
+  public setTaskExecutionState(taskId: string, state: TaskState): void {
+    const timestamp = nowIso();
+    const task = this.database.prepare(`UPDATE tasks SET state = @state, updated_at = @timestamp WHERE task_id = @taskId`).run({ taskId, state, timestamp });
+    const execution = this.database.prepare(`UPDATE task_execution_metadata SET state = @state, updated_at = @timestamp WHERE task_id = @taskId`).run({ taskId, state, timestamp });
+    if (task.changes !== 1 || execution.changes !== 1) throw new Error(`task execution not found: ${taskId}`);
+  }
+
+  public setMissionFailure(missionId: string, reason: string): void {
+    this.runInTransaction(() => {
+      const mission = this.getMission(missionId);
+      if (!mission) throw new Error(`mission not found: ${missionId}`);
+      this.saveMission(missionId, "blocked", { ...mission.payload, failureReason: reason });
+      this.database.prepare(`UPDATE mission_metadata SET failure_reason = @reason WHERE mission_id = @missionId`).run({ missionId, reason });
+    });
+  }
+
   public getTaskCount(): number {
     const row = this.database.prepare("SELECT COUNT(*) as count FROM tasks").get() as { count: number } | undefined;
     return row?.count ?? 0;
@@ -374,6 +396,7 @@ export class SqlitePersistence {
     return this.runInTransaction(() => {
       const mission = this.createMission(input.mission);
       this.saveTaskExecution(input.task);
+      if (input.snapshot) this.saveWorkspaceSnapshot(input.snapshot);
       const dispatch = this.enqueueDispatch({ ...input.dispatch, missionId: input.mission.missionId });
       input.beforeCommit?.();
       const task = this.getTaskExecution(input.task.envelope.taskId);

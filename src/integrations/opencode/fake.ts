@@ -56,6 +56,13 @@ export class FakeOpenCodeAdapter implements OpenCodeLiveAdapter {
   async sendPrompt(input: SessionPrompt): Promise<void> {
     this.requireSession(input.sessionId);
     this.promptLog.push({ ...input, model: { ...input.model } });
+    this.messages.set(input.messageId, {
+      id: input.messageId,
+      sessionId: input.sessionId,
+      role: "user",
+      createdAt: new Date().toISOString(),
+      parts: [{ id: `${input.messageId}:text`, type: "text", text: input.content }]
+    });
   }
 
   async deliverTask(sessionId: string, task: DeliveredTask): Promise<void> {
@@ -103,6 +110,11 @@ export class FakeOpenCodeAdapter implements OpenCodeLiveAdapter {
 
   deliveries(): readonly Delivery[] {
     return this.deliveryLog.map((delivery) => ({ ...delivery }));
+  }
+
+  addMessage(message: OpenCodeMessage): void {
+    this.requireSession(message.sessionId);
+    this.messages.set(message.id, copyMessage(message));
   }
 
   prompts(): readonly SessionPrompt[] {

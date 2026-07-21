@@ -8,7 +8,7 @@ export interface ControllerApiOptions {
   token: string;
   metadata: ControllerRuntimeMetadata;
   roster: PairedRoster;
-  status: () => Promise<{ opencodeHealthy: boolean; bindingsCurrent: boolean }>;
+  status: () => Promise<{ opencodeHealthy: boolean; bindingsCurrent: boolean; eventListening: boolean }>;
   shutdown: () => Promise<void>;
 }
 
@@ -37,6 +37,6 @@ async function health(options: ControllerApiOptions): Promise<Record<string, unk
     port: options.metadata.port,
     createdAt: options.metadata.createdAt,
     bindingCount: options.roster.bindings.length,
-    eventListening: false
+    eventListening: status.eventListening
   };
 }
