@@ -156,6 +156,8 @@ class MemoryPersistence implements WorkflowPersistence {
   saveWorkspaceSnapshot(): never { throw new Error("workflow persistence is not exercised by this startup fixture"); }
   setTaskExecutionState(): void {}
   setMissionFailure(): void {}
+  getMission() { return null; }
+  saveControllerCheckpoint(): void {}
 }
 
 class MutableAdapter implements OpenCodeLiveAdapter {

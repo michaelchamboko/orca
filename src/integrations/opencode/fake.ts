@@ -19,6 +19,9 @@ export class FakeOpenCodeAdapter implements OpenCodeLiveAdapter {
   private readonly deliveryLog: Delivery[] = [];
   private readonly promptLog: SessionPrompt[] = [];
   private readonly listeners = new Set<(event: OpenCodeEvent) => void>();
+  private eventsAvailable = true;
+  private streamGeneration = 0;
+  private afterSessionList: (() => void) | undefined;
 
   constructor(sessions: readonly OpenCodeSession[], messages: readonly OpenCodeMessage[] = []) {
     for (const session of sessions) {
@@ -33,7 +36,11 @@ export class FakeOpenCodeAdapter implements OpenCodeLiveAdapter {
 
   async listSessions(projectRoot?: string): Promise<OpenCodeSession[]> {
     void projectRoot;
-    return [...this.sessions.values()].map(copySession);
+    const sessions = [...this.sessions.values()].map(copySession);
+    const after = this.afterSessionList;
+    this.afterSessionList = undefined;
+    after?.();
+    return sessions;
   }
 
   async getSessionModel(sessionId: string): Promise<ModelRef> {
@@ -86,10 +93,13 @@ export class FakeOpenCodeAdapter implements OpenCodeLiveAdapter {
   }
 
   async *subscribeEvents(signal: AbortSignal): AsyncIterable<OpenCodeEvent> {
+    if (!this.eventsAvailable) throw new Error("fake SSE stream unavailable");
+    const generation = this.streamGeneration;
     const events: OpenCodeEvent[] = [];
     const stop = this.subscribe((event) => events.push(event));
     try {
       while (!signal.aborted) {
+        if (generation !== this.streamGeneration) return;
         const event = events.shift();
         if (event) {
           yield event;
@@ -116,6 +126,17 @@ export class FakeOpenCodeAdapter implements OpenCodeLiveAdapter {
     this.requireSession(message.sessionId);
     this.messages.set(message.id, copyMessage(message));
   }
+
+  replaceSession(session: OpenCodeSession): void {
+    this.requireSession(session.id);
+    this.sessions.set(session.id, copySession(session));
+  }
+
+  afterNextSessionList(callback: () => void): void { this.afterSessionList = callback; }
+
+  interruptEventStream(): void { this.streamGeneration += 1; }
+
+  setEventStreamAvailable(available: boolean): void { this.eventsAvailable = available; }
 
   prompts(): readonly SessionPrompt[] {
     return this.promptLog.map((prompt) => ({ ...prompt, model: { ...prompt.model } }));

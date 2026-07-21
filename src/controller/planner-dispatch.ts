@@ -43,12 +43,27 @@ export class PlannerDispatchOutbox {
         if (reason.startsWith("roster drift")) {
           this.persistence.setMissionFailure(action.missionId, reason);
           this.persistence.setTaskExecutionState(actionForTask(this.persistence, action.promptMessageId).envelope.taskId, "failed");
+          await this.explainRosterDrift(action.missionId, reason);
           this.persistence.acknowledgeDispatch(action.id, owner);
         } else {
           this.persistence.releaseDispatch(action.id, owner, reason);
         }
       }
     }
+  }
+
+  private async explainRosterDrift(missionId: string, reason: string): Promise<void> {
+    const mission = this.persistence.getMission(missionId);
+    const roster = this.persistence.getCurrentRoster();
+    const orchestrator = roster?.bindings.find((binding) => binding.role === "orchestrator");
+    if (!mission || !orchestrator) return;
+    await this.adapter.sendPrompt({
+      messageId: `orca-explanation-${missionId}`,
+      sessionId: orchestrator.sessionId,
+      agent: "orca-orchestrator",
+      model: { ...orchestrator.model },
+      content: `${reason}. [ORCA_CORRELATION:${mission.sourceSessionMessageId ?? missionId}]`
+    });
   }
 }
 

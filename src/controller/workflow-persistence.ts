@@ -23,4 +23,6 @@ export interface WorkflowPersistence extends RosterPersistence {
   saveWorkspaceSnapshot(input: { snapshotId: string; missionId?: string; projectRoot: string; fingerprint: string; payload: Record<string, unknown> }): WorkspaceSnapshot;
   setTaskExecutionState(taskId: string, state: TaskState): void;
   setMissionFailure(missionId: string, reason: string): void;
+  getMission(missionId: string): import("../persistence/sqlite.js").MissionDataRecord | null;
+  saveControllerCheckpoint(input: import("../persistence/sqlite.js").ControllerCheckpointInput): void;
 }

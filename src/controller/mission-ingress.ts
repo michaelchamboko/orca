@@ -11,6 +11,7 @@ import { PlannerDispatchOutbox } from "./planner-dispatch.js";
 const TASK_TIMEOUT_MS = 10 * 60_000;
 
 export class MissionIngress {
+  private startupCutoff: Date | undefined;
   constructor(
     private readonly projectRoot: string,
     private readonly adapter: OpenCodeLiveAdapter,
@@ -20,7 +21,9 @@ export class MissionIngress {
   ) {}
 
   async processStartup(cutoff: Date): Promise<void> {
+    this.startupCutoff = cutoff;
     const roster = await this.rosterService.assertCurrent();
+    this.persistence.saveControllerCheckpoint({ cursorKey: "controller:mission-ingress-cutoff", rosterId: roster.rosterId, cursor: cutoff.toISOString(), payload: { kind: "startup_cutoff" } });
     const orchestrator = bindingFor(roster, "orchestrator");
     for (const message of await this.adapter.listMessages(orchestrator.sessionId)) await this.process(message, cutoff);
   }
@@ -44,18 +47,27 @@ export class MissionIngress {
     const roster = this.persistence.getCurrentRoster();
     const orchestrator = roster && roster.bindings.find((binding) => binding.role === "orchestrator");
     if (!roster || !orchestrator || message.sessionId !== orchestrator.sessionId || message.role !== "user") return;
-    if (historicalCutoff && Date.parse(message.createdAt) <= historicalCutoff.getTime()) return;
+    const cutoff = historicalCutoff ?? this.startupCutoff;
+    if (cutoff && Date.parse(message.createdAt) <= cutoff.getTime()) return;
     const objective = message.parts.filter((part) => part.type === "text" && typeof part.text === "string").map((part) => part.text ?? "").join("\n").trim();
     if (!objective || objective.includes("[ORCA_DISPATCH:")) return;
-    const messageHash = stableId("processed", roster.rosterId, message.id);
-    if (!this.persistence.recordProcessedMessage({ messageHash, messageId: message.id, eventType: "mission.ingress", sessionId: message.sessionId, payload: { outcome: "received" } })) return;
     let current: PairedRoster;
-    try { current = await this.rosterService.assertCurrent(); } catch {
+    try {
+      current = await this.rosterService.assertCurrent();
+      if (current.projectRoot !== this.projectRoot) throw new Error("repository root mismatch");
+    } catch {
+      await this.explainBlockedIngress(message, orchestrator, "The paired roster is no longer valid, so this objective remains eligible for a safe retry. ");
       return;
     }
+    let baseline: ReturnType<typeof captureProvisionalDispatchBaseline>;
+    try { baseline = captureProvisionalDispatchBaseline(this.projectRoot); } catch {
+      await this.explainBlockedIngress(message, orchestrator, "The repository baseline could not be captured, so this objective remains eligible for a safe retry. ");
+      return;
+    }
+    const messageHash = stableId("processed", current.rosterId, message.id);
+    if (!this.persistence.recordProcessedMessage({ messageHash, messageId: message.id, eventType: "mission.ingress", sessionId: message.sessionId, payload: { outcome: "validated" } })) return;
     try {
       const planner = bindingFor(current, "planner");
-      const baseline = captureProvisionalDispatchBaseline(this.projectRoot);
       const missionId = stableId("mission", current.rosterId, message.id);
       const taskId = stableId("task", current.rosterId, message.id);
       const dispatchKey = stableId("dispatch", current.rosterId, message.id);
@@ -80,6 +92,11 @@ export class MissionIngress {
         await this.adapter.sendPrompt({ messageId: stableId("orca-explanation", current.rosterId, message.id), sessionId: orchestrator.sessionId, agent: "orca-orchestrator", model: { ...orchestrator.model }, content: `This objective cannot start because another mission is active. [ORCA_CORRELATION:${message.id}]` });
       }
     }
+  }
+
+  private async explainBlockedIngress(message: OpenCodeMessage, orchestrator: PairedRoster["bindings"][number], explanation: string): Promise<void> {
+    this.persistence.saveControllerCheckpoint({ cursorKey: `controller:mission-ingress-blocked:${message.id}`, rosterId: this.persistence.getCurrentRoster()?.rosterId ?? null, cursor: new Date().toISOString(), payload: { outcome: "blocked", reason: explanation } });
+    await this.adapter.sendPrompt({ messageId: stableId("orca-explanation", this.persistence.getCurrentRoster()?.rosterId ?? "unpaired", message.id), sessionId: orchestrator.sessionId, agent: "orca-orchestrator", model: { ...orchestrator.model }, content: `${explanation}[ORCA_CORRELATION:${message.id}]` });
   }
 }
 
