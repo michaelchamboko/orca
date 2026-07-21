@@ -28,6 +28,7 @@ export interface MissionDataRecord {
   objective: string | null;
   sourceSessionMessageId: string | null;
   failureReason: string | null;
+  metadataState: MissionState | null;
 }
 
 export interface CreateMissionInput {
@@ -171,9 +172,15 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-function plusMilliseconds(timestamp: string, durationMs: number): string {
+function normalizeTimestamp(timestamp: string): string {
   const start = Date.parse(timestamp);
-  if (Number.isNaN(start) || durationMs <= 0) throw new Error("lease duration and timestamp must be valid");
+  if (Number.isNaN(start)) throw new Error("timestamp must be a valid ISO-8601 instant");
+  return new Date(start).toISOString();
+}
+
+function plusMilliseconds(timestamp: string, durationMs: number): string {
+  const start = Date.parse(normalizeTimestamp(timestamp));
+  if (durationMs <= 0) throw new Error("lease duration must be positive");
   return new Date(start + durationMs).toISOString();
 }
 
@@ -218,29 +225,32 @@ export class SqlitePersistence {
   }
 
   public saveMission(missionId: string, state: MissionState, payload: Record<string, JsonLike>): void {
-    const timestamp = nowIso();
-    this.database.prepare(`
-      INSERT INTO missions (mission_id, state, payload, created_at, updated_at)
-      VALUES (@missionId, @state, @payload, @timestamp, @timestamp)
-      ON CONFLICT (mission_id) DO UPDATE SET
-        state = excluded.state,
-        payload = excluded.payload,
-        updated_at = excluded.updated_at
-    `).run({ missionId, state, payload: toJsonString(payload), timestamp });
-    this.database.prepare(`UPDATE mission_metadata SET state = @state WHERE mission_id = @missionId`)
-      .run({ missionId, state });
+    this.runInTransaction(() => {
+      const timestamp = nowIso();
+      this.database.prepare(`
+        INSERT INTO missions (mission_id, state, payload, created_at, updated_at)
+        VALUES (@missionId, @state, @payload, @timestamp, @timestamp)
+        ON CONFLICT (mission_id) DO UPDATE SET
+          state = excluded.state,
+          payload = excluded.payload,
+          updated_at = excluded.updated_at
+      `).run({ missionId, state, payload: toJsonString(payload), timestamp });
+      this.database.prepare(`UPDATE mission_metadata SET state = @state WHERE mission_id = @missionId`)
+        .run({ missionId, state });
+    });
   }
 
   public getMission(missionId: string): MissionDataRecord | null {
     const row = this.database.prepare(`
       SELECT m.mission_id, m.state, m.payload, m.created_at, m.updated_at,
-        metadata.roster_id, metadata.objective, metadata.source_session_message_id, metadata.failure_reason
+        metadata.roster_id, metadata.objective, metadata.source_session_message_id, metadata.failure_reason,
+        metadata.state AS metadata_state
       FROM missions m
       LEFT JOIN mission_metadata metadata ON metadata.mission_id = m.mission_id
       WHERE m.mission_id = @missionId
     `).get({ missionId }) as {
       mission_id: string; state: MissionState; payload: string; created_at: string; updated_at: string;
-      roster_id: string | null; objective: string | null; source_session_message_id: string | null; failure_reason: string | null;
+      roster_id: string | null; objective: string | null; source_session_message_id: string | null; failure_reason: string | null; metadata_state: MissionState | null;
     } | undefined;
     if (!row) return null;
     return {
@@ -252,7 +262,8 @@ export class SqlitePersistence {
       rosterId: row.roster_id,
       objective: row.objective,
       sourceSessionMessageId: row.source_session_message_id,
-      failureReason: row.failure_reason
+      failureReason: row.failure_reason,
+      metadataState: row.metadata_state
     };
   }
 
@@ -431,39 +442,42 @@ export class SqlitePersistence {
   }
 
   public claimNextDispatch(leaseOwner: string, leaseDurationMs: number, timestamp = nowIso()): DispatchOutboxAction | null {
+    const claimTimestamp = normalizeTimestamp(timestamp);
     const candidate = this.database.prepare(`
       SELECT id FROM dispatch_outbox
-      WHERE acknowledged_at IS NULL AND (lease_expires_at IS NULL OR lease_expires_at <= @timestamp)
+      WHERE acknowledged_at IS NULL AND (lease_expires_at IS NULL OR julianday(lease_expires_at) <= julianday(@timestamp))
       ORDER BY id ASC LIMIT 1
-    `).get({ timestamp }) as { id: number } | undefined;
+    `).get({ timestamp: claimTimestamp }) as { id: number } | undefined;
     if (!candidate) return null;
-    const leaseExpiresAt = plusMilliseconds(timestamp, leaseDurationMs);
+    const leaseExpiresAt = plusMilliseconds(claimTimestamp, leaseDurationMs);
     const claimed = this.database.prepare(`
       UPDATE dispatch_outbox
       SET state = 'claimed', lease_owner = @leaseOwner, lease_expires_at = @leaseExpiresAt,
         attempt = attempt + 1, updated_at = @timestamp
-      WHERE id = @id AND acknowledged_at IS NULL AND (lease_expires_at IS NULL OR lease_expires_at <= @timestamp)
-    `).run({ id: candidate.id, leaseOwner, leaseExpiresAt, timestamp });
+      WHERE id = @id AND acknowledged_at IS NULL AND (lease_expires_at IS NULL OR julianday(lease_expires_at) <= julianday(@timestamp))
+    `).run({ id: candidate.id, leaseOwner, leaseExpiresAt, timestamp: claimTimestamp });
     if (claimed.changes === 0) return null;
     const row = this.database.prepare(`SELECT * FROM dispatch_outbox WHERE id = @id`).get({ id: candidate.id }) as DispatchOutboxRow;
     return dispatchFromRow(row);
   }
 
   public releaseDispatch(id: number, leaseOwner: string, lastError: string | null = null, timestamp = nowIso()): void {
+    const releaseTimestamp = normalizeTimestamp(timestamp);
     const result = this.database.prepare(`
       UPDATE dispatch_outbox
       SET state = 'pending', lease_owner = NULL, lease_expires_at = NULL, last_error = @lastError, updated_at = @timestamp
       WHERE id = @id AND lease_owner = @leaseOwner AND acknowledged_at IS NULL
-    `).run({ id, leaseOwner, lastError, timestamp });
+    `).run({ id, leaseOwner, lastError, timestamp: releaseTimestamp });
     if (result.changes === 0) throw new Error(`dispatch is not claimed by ${leaseOwner}: ${id}`);
   }
 
   public acknowledgeDispatch(id: number, leaseOwner: string, timestamp = nowIso()): void {
+    const acknowledgedAt = normalizeTimestamp(timestamp);
     const result = this.database.prepare(`
       UPDATE dispatch_outbox
       SET state = 'acknowledged', lease_owner = NULL, lease_expires_at = NULL, acknowledged_at = @timestamp, updated_at = @timestamp
       WHERE id = @id AND lease_owner = @leaseOwner AND acknowledged_at IS NULL
-    `).run({ id, leaseOwner, timestamp });
+    `).run({ id, leaseOwner, timestamp: acknowledgedAt });
     if (result.changes === 0) throw new Error(`dispatch is not claimed by ${leaseOwner}: ${id}`);
   }
 
