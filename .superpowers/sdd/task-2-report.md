@@ -52,3 +52,34 @@ The contract tests cover documented message GET routes, limit forwarding, messag
 ## Scope and limitations
 
 No controller, persistence, mission, worker, or completion behavior was added. The adapter preserves absent optional message and event fields as `undefined` through optional normalized properties. The documented global envelope is validated; malformed data raises `OpenCodeEventError` rather than yielding a blank event.
+
+## Follow-up correlation fix evidence
+
+The review found two correlation gaps. The adapter now rejects a `session.error` event without `properties.sessionID`, and rejects list/get message responses whose `info.sessionID` differs from the requested session.
+
+RED evidence:
+
+```text
+pnpm.cmd exec vitest run tests/contract/opencode-live-adapter.test.ts
+exit 1: 3 failures / 14 tests
+- a listed message for s-other resolved for requested session s-1
+- a fetched message for s-other resolved for requested session s-1
+- session.error without sessionID yielded an uncorrelated event
+```
+
+GREEN focused verification:
+
+```text
+pnpm.cmd exec vitest run tests/contract/opencode-live-adapter.test.ts
+exit 0: 1 file passed, 14 tests passed
+```
+
+Follow-up required verification:
+
+| Command | Result |
+| --- | --- |
+| `pnpm.cmd run test:contract` | PASS — 3 files, 28 tests |
+| `pnpm.cmd run test:unit` | PASS — 12 files, 57 tests |
+| `pnpm.cmd run typecheck` | PASS |
+| `pnpm.cmd run lint` | PASS |
+| `pnpm.cmd run build` | PASS |

@@ -79,6 +79,20 @@ describe("RealOpenCodeAdapter", () => {
     await expect(adapter.getMessage("s-1", "m-1")).resolves.toEqual(normalizedMessage);
   });
 
+  it("rejects a listed message that belongs to another session", async () => {
+    const baseUrl = await fixture((_request, response) => json(response, [messageFor("s-other")]));
+    const adapter = new RealOpenCodeAdapter({ ...credentials, baseUrl });
+
+    await expect(adapter.listMessages("s-1")).rejects.toMatchObject({ name: "OpenCodeEventError", message: expect.stringContaining("sessionID does not match") });
+  });
+
+  it("rejects a fetched message that belongs to another session", async () => {
+    const baseUrl = await fixture((_request, response) => json(response, messageFor("s-other")));
+    const adapter = new RealOpenCodeAdapter({ ...credentials, baseUrl });
+
+    await expect(adapter.getMessage("s-1", "m-1")).rejects.toMatchObject({ name: "OpenCodeEventError", message: expect.stringContaining("sessionID does not match") });
+  });
+
   it("posts a correlated prompt with the paired model and does not update session configuration", async () => {
     const requests: Array<{ url: string | undefined; method: string | undefined; body?: unknown }> = [];
     const baseUrl = await fixture(async (request, response) => {
@@ -154,6 +168,17 @@ describe("RealOpenCodeAdapter", () => {
     await expect(adapter.subscribeEvents(controller.signal)[Symbol.asyncIterator]().next()).rejects.toMatchObject({ name: "OpenCodeEventError", message: expect.stringContaining("Malformed") });
   });
 
+  it("rejects a session.error event without a session correlation", async () => {
+    const baseUrl = await fixture((_request, response) => {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end(sse({ directory: "C:/workspace", payload: { type: "session.error", properties: { error: { message: "provider failed" } } } }));
+    });
+    const adapter = new RealOpenCodeAdapter({ ...credentials, baseUrl });
+    const controller = new AbortController();
+
+    await expect(adapter.subscribeEvents(controller.signal)[Symbol.asyncIterator]().next()).rejects.toMatchObject({ name: "OpenCodeEventError", message: expect.stringContaining("session.error sessionID") });
+  });
+
   it("turns HTTP failures into useful errors", async () => {
     const baseUrl = await fixture((_request, response) => {
       response.statusCode = 401;
@@ -210,6 +235,13 @@ const normalizedMessage = {
 
 function sse(value: unknown): string {
   return `event: global\ndata: ${JSON.stringify(value)}\n\n`;
+}
+
+function messageFor(sessionID: string) {
+  return {
+    info: { id: "m-1", sessionID, role: "assistant", time: { created: "2026-07-21T12:00:00.000Z" } },
+    parts: []
+  };
 }
 
 async function fixture(handler: (request: IncomingMessage, response: ServerResponse) => void | Promise<void>): Promise<string> {

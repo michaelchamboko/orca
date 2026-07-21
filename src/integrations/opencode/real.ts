@@ -51,11 +51,11 @@ export class RealOpenCodeAdapter implements OpenCodeLiveAdapter {
     const path = `/session/${encodeURIComponent(sessionId)}/message${limit === undefined ? "" : `?limit=${encodeURIComponent(limit)}`}`;
     const messages = await this.json<unknown>(path);
     if (!Array.isArray(messages)) throw new OpenCodeEventError("Malformed OpenCode message list response.");
-    return messages.map(toMessage);
+    return messages.map((message) => requireMessageSession(sessionId, toMessage(message)));
   }
 
   async getMessage(sessionId: string, messageId: string): Promise<OpenCodeMessage> {
-    return toMessage(await this.json<unknown>(`/session/${encodeURIComponent(sessionId)}/message/${encodeURIComponent(messageId)}`));
+    return requireMessageSession(sessionId, toMessage(await this.json<unknown>(`/session/${encodeURIComponent(sessionId)}/message/${encodeURIComponent(messageId)}`)));
   }
 
   async sendPrompt(input: SessionPrompt): Promise<void> {
@@ -210,6 +210,11 @@ function toMessage(value: unknown): OpenCodeMessage {
   return normalized;
 }
 
+function requireMessageSession(requestedSessionId: string, message: OpenCodeMessage): OpenCodeMessage {
+  if (message.sessionId !== requestedSessionId) throw new OpenCodeEventError("Malformed OpenCode message response: sessionID does not match the requested session.");
+  return message;
+}
+
 function toMessagePart(value: unknown): OpenCodeMessagePart {
   const part = requireObject(value, "message part");
   const normalized: OpenCodeMessagePart = {
@@ -252,8 +257,7 @@ function toEvent(_eventType: string, value: unknown): OpenCodeEvent {
       event.messageId = requireString(properties.messageID, "permission.updated messageID");
       break;
     case "session.error": {
-      const sessionId = optionalString(properties.sessionID);
-      if (sessionId !== undefined) event.sessionId = sessionId;
+      event.sessionId = requireString(properties.sessionID, "session.error sessionID");
       break;
     }
     case "session.deleted": {
