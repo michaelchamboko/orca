@@ -152,7 +152,7 @@ function sessionActivity(session: Record<string, unknown>): string | undefined {
 
 function toModel(value: unknown): ModelRef {
   const model = object(object(value).model);
-  return { providerId: string(model.providerID, string(model.providerId, "unknown")), modelId: string(model.modelID, string(model.modelId, "unknown")) };
+  return { providerId: string(model.providerID, string(model.providerId, "unknown")), modelId: string(model.modelID, string(model.modelId, string(model.id, "unknown"))) };
 }
 
 function toStatus(value: unknown): SessionStatus {

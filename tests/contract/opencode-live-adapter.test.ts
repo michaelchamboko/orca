@@ -27,10 +27,21 @@ describe("RealOpenCodeAdapter", () => {
     await expect(adapter.listSessions("C:/workspace")).resolves.toEqual([expect.objectContaining({ id: "s-1", projectRoot: "C:/workspace", lastActivity: "2026-07-20T09:00:00.000Z", model: { providerId: "openai", modelId: "gpt-5" } })]);
   });
 
-  it("looks up a session model and dispatches prompts asynchronously", async () => {
+  it("preserves a session model reported as id", async () => {
+    const baseUrl = await fixture((_request, response) => {
+      json(response, [{ id: "s-1", directory: "C:/workspace", model: { providerID: "opencode", id: "north-mini-code-free" } }]);
+    });
+    const adapter = new RealOpenCodeAdapter({ ...credentials, baseUrl });
+
+    await expect(adapter.listSessions("C:/workspace")).resolves.toEqual([
+      expect.objectContaining({ model: { providerId: "opencode", modelId: "north-mini-code-free" } })
+    ]);
+  });
+
+  it("uses the session's saved model without sending a dispatch override", async () => {
     const seen: unknown[] = [];
     const baseUrl = await fixture(async (request, response) => {
-      if (request.url === "/session/s-1" && request.method === "GET") return json(response, { id: "s-1", model: { providerID: "openai", modelID: "gpt-5" } });
+      if (request.url === "/session/s-1" && request.method === "GET") return json(response, { id: "s-1", model: { providerID: "opencode", id: "north-mini-code-free" } });
       if (request.url === "/session/s-1/prompt_async" && request.method === "POST") {
         seen.push(await body(request));
         response.statusCode = 204;
@@ -42,7 +53,7 @@ describe("RealOpenCodeAdapter", () => {
     });
     const adapter = new RealOpenCodeAdapter({ ...credentials, baseUrl });
 
-    await expect(adapter.getSessionModel("s-1")).resolves.toEqual({ providerId: "openai", modelId: "gpt-5" });
+    await expect(adapter.getSessionModel("s-1")).resolves.toEqual({ providerId: "opencode", modelId: "north-mini-code-free" });
     await expect(adapter.sendPrompt({ sessionId: "s-1", content: "implement the plan" })).resolves.toBeUndefined();
     expect(seen).toEqual([{ parts: [{ type: "text", text: "implement the plan" }] }]);
   });

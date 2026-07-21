@@ -25,6 +25,7 @@ describe("authenticated controller startup", () => {
     const controller = await runningController();
 
     expect(controller.address).toEqual({ host: "127.0.0.1", port: 4317 });
+    expect(readFileSync(join(controller.projectRoot, ".opencode", "agents", "orca-orchestrator.md"), "utf8")).not.toMatch(/^model:/m);
     expect((await controller.api.inject({ method: "GET", url: "/health" })).statusCode).toBe(401);
     expect((await controller.api.inject({ method: "GET", url: "/health", headers: { authorization: `Bearer ${controller.token}` } })).json()).toMatchObject({ healthy: true, opencodeHealthy: true, bindingsCurrent: true, bindingCount: 5 });
   });
