@@ -1,8 +1,9 @@
-import type { OpenCodeAdapter } from "./adapter.js";
+import type { OpenCodeLiveAdapter } from "./adapter.js";
 import type { ModelRef } from "../../domain/types.js";
 import type {
   DeliveredTask,
   OpenCodeEvent,
+  OpenCodeMessage,
   OpenCodeSession,
   SessionPrompt,
   SessionStatus
@@ -12,15 +13,18 @@ export interface Delivery extends DeliveredTask {
   sessionId: string;
 }
 
-export class FakeOpenCodeAdapter implements OpenCodeAdapter {
+export class FakeOpenCodeAdapter implements OpenCodeLiveAdapter {
   private readonly sessions = new Map<string, OpenCodeSession>();
+  private readonly messages = new Map<string, OpenCodeMessage>();
   private readonly deliveryLog: Delivery[] = [];
+  private readonly promptLog: SessionPrompt[] = [];
   private readonly listeners = new Set<(event: OpenCodeEvent) => void>();
 
-  constructor(sessions: readonly OpenCodeSession[]) {
+  constructor(sessions: readonly OpenCodeSession[], messages: readonly OpenCodeMessage[] = []) {
     for (const session of sessions) {
       this.sessions.set(session.id, copySession(session));
     }
+    for (const message of messages) this.messages.set(message.id, copyMessage(message));
   }
 
   async health(): Promise<{ healthy: boolean }> {
@@ -36,8 +40,22 @@ export class FakeOpenCodeAdapter implements OpenCodeAdapter {
     return { ...this.requireSession(sessionId).model };
   }
 
+  async listMessages(sessionId: string, limit?: number): Promise<OpenCodeMessage[]> {
+    this.requireSession(sessionId);
+    const messages = [...this.messages.values()].filter((message) => message.sessionId === sessionId);
+    return (limit === undefined ? messages : messages.slice(0, limit)).map(copyMessage);
+  }
+
+  async getMessage(sessionId: string, messageId: string): Promise<OpenCodeMessage> {
+    this.requireSession(sessionId);
+    const message = this.messages.get(messageId);
+    if (!message || message.sessionId !== sessionId) throw new Error(`unknown OpenCode message: ${messageId}`);
+    return copyMessage(message);
+  }
+
   async sendPrompt(input: SessionPrompt): Promise<void> {
-    await this.deliverTask(input.sessionId, { taskId: "prompt", content: input.content });
+    this.requireSession(input.sessionId);
+    this.promptLog.push({ ...input, model: { ...input.model } });
   }
 
   async deliverTask(sessionId: string, task: DeliveredTask): Promise<void> {
@@ -87,6 +105,10 @@ export class FakeOpenCodeAdapter implements OpenCodeAdapter {
     return this.deliveryLog.map((delivery) => ({ ...delivery }));
   }
 
+  prompts(): readonly SessionPrompt[] {
+    return this.promptLog.map((prompt) => ({ ...prompt, model: { ...prompt.model } }));
+  }
+
   private requireSession(sessionId: string): OpenCodeSession {
     const session = this.sessions.get(sessionId);
     if (!session) {
@@ -102,4 +124,8 @@ function copySession(session: OpenCodeSession): OpenCodeSession {
     ...session,
     model: { ...session.model }
   };
+}
+
+function copyMessage(message: OpenCodeMessage): OpenCodeMessage {
+  return { ...message, parts: message.parts.map((part) => ({ ...part })) };
 }

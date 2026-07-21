@@ -1,6 +1,6 @@
 import type { ModelRef } from "../../domain/types.js";
 import type { OpenCodeLiveAdapter } from "./adapter.js";
-import type { DeliveredTask, OpenCodeEvent, OpenCodeSession, SessionPrompt, SessionStatus } from "./types.js";
+import type { DeliveredTask, OpenCodeEvent, OpenCodeMessage, OpenCodeMessagePart, OpenCodeSession, SessionPrompt, SessionStatus } from "./types.js";
 
 export interface RealOpenCodeAdapterConfig {
   baseUrl: string;
@@ -47,15 +47,28 @@ export class RealOpenCodeAdapter implements OpenCodeLiveAdapter {
     return toModel(await this.json<unknown>(`/session/${encodeURIComponent(sessionId)}`));
   }
 
+  async listMessages(sessionId: string, limit?: number): Promise<OpenCodeMessage[]> {
+    const path = `/session/${encodeURIComponent(sessionId)}/message${limit === undefined ? "" : `?limit=${encodeURIComponent(limit)}`}`;
+    const messages = await this.json<unknown>(path);
+    if (!Array.isArray(messages)) throw new OpenCodeEventError("Malformed OpenCode message list response.");
+    return messages.map(toMessage);
+  }
+
+  async getMessage(sessionId: string, messageId: string): Promise<OpenCodeMessage> {
+    return toMessage(await this.json<unknown>(`/session/${encodeURIComponent(sessionId)}/message/${encodeURIComponent(messageId)}`));
+  }
+
   async sendPrompt(input: SessionPrompt): Promise<void> {
-    const body: Record<string, unknown> = { parts: [{ type: "text", text: input.content }] };
-    if (input.agent) body.agent = input.agent;
-    if (input.model) body.model = { providerID: input.model.providerId, modelID: input.model.modelId };
-    await this.request(`/session/${encodeURIComponent(input.sessionId)}/prompt_async`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    await this.postPrompt(input.sessionId, {
+      messageID: input.messageId,
+      agent: input.agent,
+      model: { providerID: input.model.providerId, modelID: input.model.modelId },
+      parts: [{ type: "text", text: input.content }]
+    });
   }
 
   async deliverTask(sessionId: string, task: DeliveredTask): Promise<void> {
-    await this.sendPrompt({ sessionId, content: task.content });
+    await this.postPrompt(sessionId, { parts: [{ type: "text", text: task.content }] });
   }
 
   async getSessionStatus(sessionId: string): Promise<SessionStatus> {
@@ -82,7 +95,12 @@ export class RealOpenCodeAdapter implements OpenCodeLiveAdapter {
           if (!line) continue;
           if (line.startsWith("event:")) eventType = line.slice(6).trim();
           if (!line.startsWith("data:")) continue;
-          const parsed = JSON.parse(line.slice(5).trim()) as unknown;
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(line.slice(5).trim()) as unknown;
+          } catch {
+            throw new OpenCodeEventError("Malformed OpenCode global event JSON.");
+          }
           yield toEvent(eventType, parsed);
           eventType = "message";
         }
@@ -99,6 +117,10 @@ export class RealOpenCodeAdapter implements OpenCodeLiveAdapter {
 
   private async json<T>(path: string): Promise<T> {
     return (await this.request(path)).json() as Promise<T>;
+  }
+
+  private async postPrompt(sessionId: string, body: Record<string, unknown>): Promise<void> {
+    await this.request(`/session/${encodeURIComponent(sessionId)}/prompt_async`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   }
 
   private async request(path: string, init: RequestInit = {}, externalSignal?: AbortSignal, timeout = true): Promise<Response> {
@@ -155,21 +177,135 @@ function toModel(value: unknown): ModelRef {
   return { providerId: string(model.providerID, string(model.providerId, "unknown")), modelId: string(model.modelID, string(model.modelId, string(model.id, "unknown"))) };
 }
 
+export class OpenCodeEventError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OpenCodeEventError";
+  }
+}
+
 function toStatus(value: unknown): SessionStatus {
   const status = object(value);
   const state = string(status.type, string(status.status, "idle"));
   return { idle: state === "idle", inFlightToolCalls: number(status.inFlightToolCalls) };
 }
 
-function toEvent(type: string, value: unknown): OpenCodeEvent {
-  const event = object(value);
-  const properties = object(event.properties);
-  const payload = event.value ?? event.properties ?? value;
-  return { sessionId: string(event.sessionID, string(event.sessionId, string(properties.sessionID, string(properties.sessionId)))), type: string(event.type, type), payload };
+function toMessage(value: unknown): OpenCodeMessage {
+  const message = requireObject(value, "message");
+  const info = requireObject(message.info, "message info");
+  const role = requireString(info.role, "message role");
+  if (role !== "user" && role !== "assistant") throw new OpenCodeEventError("Malformed OpenCode message response: unsupported role.");
+  const time = requireObject(info.time, "message time");
+  const normalized: OpenCodeMessage = {
+    id: requireString(info.id, "message id"),
+    sessionId: requireString(info.sessionID, "message sessionID"),
+    role,
+    createdAt: toTimestamp(time.created, "message created time"),
+    parts: requireArray(message.parts, "message parts").map(toMessagePart)
+  };
+  const parentId = optionalString(info.parentID);
+  const completedAt = optionalTimestamp(time.completed, "message completed time");
+  if (parentId !== undefined) normalized.parentId = parentId;
+  if (completedAt !== undefined) normalized.completedAt = completedAt;
+  return normalized;
+}
+
+function toMessagePart(value: unknown): OpenCodeMessagePart {
+  const part = requireObject(value, "message part");
+  const normalized: OpenCodeMessagePart = {
+    id: requireString(part.id, "message part id"),
+    type: requireString(part.type, "message part type")
+  };
+  const text = optionalString(part.text);
+  const toolStatus = optionalToolStatus(object(part.state).status);
+  if (text !== undefined) normalized.text = text;
+  if (toolStatus !== undefined) normalized.toolStatus = toolStatus;
+  return normalized;
+}
+
+function toEvent(_eventType: string, value: unknown): OpenCodeEvent {
+  const envelope = requireObject(value, "global event envelope");
+  const payload = requireObject(envelope.payload, "global event payload");
+  const type = requireString(payload.type, "global event type");
+  const properties = requireObject(payload.properties, "global event properties");
+  const event: OpenCodeEvent = { directory: requireString(envelope.directory, "global event directory"), type, payload: properties };
+
+  switch (type) {
+    case "message.updated": {
+      const info = requireObject(properties.info, "message.updated info");
+      event.sessionId = requireString(info.sessionID, "message.updated sessionID");
+      event.messageId = requireString(info.id, "message.updated message id");
+      break;
+    }
+    case "message.part.updated": {
+      const part = requireObject(properties.part, "message.part.updated part");
+      event.sessionId = requireString(part.sessionID, "message.part.updated sessionID");
+      event.messageId = requireString(part.messageID, "message.part.updated messageID");
+      break;
+    }
+    case "session.status":
+    case "session.idle":
+      event.sessionId = requireString(properties.sessionID, `${type} sessionID`);
+      break;
+    case "permission.updated":
+      event.sessionId = requireString(properties.sessionID, "permission.updated sessionID");
+      event.messageId = requireString(properties.messageID, "permission.updated messageID");
+      break;
+    case "session.error": {
+      const sessionId = optionalString(properties.sessionID);
+      if (sessionId !== undefined) event.sessionId = sessionId;
+      break;
+    }
+    case "session.deleted": {
+      const info = requireObject(properties.info, "session.deleted info");
+      event.sessionId = requireString(info.id, "session.deleted session id");
+      break;
+    }
+  }
+
+  return event;
 }
 
 function object(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function requireObject(value: unknown, label: string): Record<string, unknown> {
+  const result = object(value);
+  if (Object.keys(result).length === 0) throw new OpenCodeEventError(`Malformed OpenCode ${label}.`);
+  return result;
+}
+
+function requireArray(value: unknown, label: string): unknown[] {
+  if (!Array.isArray(value)) throw new OpenCodeEventError(`Malformed OpenCode ${label}.`);
+  return value;
+}
+
+function requireString(value: unknown, label: string): string {
+  const result = optionalString(value);
+  if (result === undefined) throw new OpenCodeEventError(`Malformed OpenCode ${label}.`);
+  return result;
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function toTimestamp(value: unknown, label: string): string {
+  const result = optionalTimestamp(value, label);
+  if (result === undefined) throw new OpenCodeEventError(`Malformed OpenCode ${label}.`);
+  return result;
+}
+
+function optionalTimestamp(value: unknown, label: string): string | undefined {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return new Date(value).toISOString();
+  if (value === undefined) return undefined;
+  throw new OpenCodeEventError(`Malformed OpenCode ${label}.`);
+}
+
+function optionalToolStatus(value: unknown): OpenCodeMessagePart["toolStatus"] | undefined {
+  return value === "pending" || value === "running" || value === "completed" || value === "error" ? value : undefined;
 }
 
 function string(value: unknown, fallback = ""): string {

@@ -154,6 +154,8 @@ class MutableAdapter implements OpenCodeLiveAdapter {
 
   async listSessions(): Promise<OpenCodeSession[]> { return this.sessions.map((session) => ({ ...session, model: { ...session.model } })); }
   async getSessionModel(sessionId: string) { return { ...this.requireSession(sessionId).model }; }
+  async listMessages(sessionId: string): Promise<[]> { this.requireSession(sessionId); return []; }
+  async getMessage(sessionId: string, messageId: string): Promise<never> { this.requireSession(sessionId); throw new Error(`unknown message ${messageId}`); }
   async sendPrompt(input: SessionPrompt): Promise<void> { this.requireSession(input.sessionId); }
   async deliverTask(sessionId: string): Promise<void> { this.requireSession(sessionId); }
   async getSessionStatus(sessionId: string): Promise<SessionStatus> { const session = this.requireSession(sessionId); return { idle: session.status === "idle", inFlightToolCalls: session.inFlightToolCalls }; }
