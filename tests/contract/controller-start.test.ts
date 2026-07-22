@@ -154,7 +154,10 @@ class MemoryPersistence implements WorkflowPersistence {
   getPendingDispatches() { return []; }
   getTaskExecutionByPromptMessageId() { return null; }
   getTaskExecutionsForCompletion() { return []; }
+  listAllTaskExecutions() { return []; }
   saveTaskExecutionOutput(): void {}
+  saveMission(): void {}
+  enqueueDispatch(): never { throw new Error("not used in startup fixture"); }
   saveTaskResult(): void {}
   blockTaskExecution(): void {}
   recordControllerEvent(): void {}
@@ -170,6 +173,9 @@ class MemoryPersistence implements WorkflowPersistence {
   completeTaskExecutionAtomically(): void {}
   runInTransaction<T>(operation: () => T): T { return operation(); }
   hasActiveMission(): boolean { return false; }
+  saveTaskExecution(): void {}
+  getTask() { return null; }
+  recordApproval() { return { approvalId: "", missionId: "", taskId: null, decision: "approved" as const, reason: null, createdAt: new Date().toISOString() }; }
   recordOrchestratorActionMessage() { return { id: 1, createdAt: new Date().toISOString() }; }
   markOrchestratorActionMessageAccepted(): void {}
   markOrchestratorActionMessageRejected(): void {}

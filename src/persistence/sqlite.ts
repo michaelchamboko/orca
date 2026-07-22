@@ -402,6 +402,16 @@ export class SqlitePersistence {
     return rows.map((row) => this.getTaskExecution(row.task_id)).filter((task): task is TaskExecutionRecord => Boolean(task));
   }
 
+  public listAllTaskExecutions(): Array<TaskExecutionRecord & { consumedAt: string | null }> {
+    const rows = this.database.prepare(`
+      SELECT task_id FROM task_execution_metadata ORDER BY updated_at ASC
+    `).all() as Array<{ task_id: string }>;
+    return rows.map((row) => this.getTaskExecution(row.task_id)).filter((task): task is (TaskExecutionRecord & { consumedAt: string | null }) => Boolean(task)).map((task) => {
+      const consumedAtRow = this.database.prepare(`SELECT consumed_at FROM tasks WHERE task_id = @taskId`).get({ taskId: task.taskId }) as { consumed_at: string | null } | undefined;
+      return { ...task, consumedAt: consumedAtRow?.consumed_at ?? null };
+    });
+  }
+
   public saveTaskExecutionOutput(taskId: string, workerOutputMessageId: string): void {
     const info = this.database.prepare(`UPDATE task_execution_metadata
       SET worker_output_message_id = @workerOutputMessageId, updated_at = @timestamp WHERE task_id = @taskId`)
@@ -731,7 +741,8 @@ export class SqlitePersistence {
 
   public recordApproval(input: ApprovalInput): ApprovalRecord {
     const createdAt = nowIso();
-    this.database.prepare(`INSERT INTO orchestrator_approvals (approval_id, mission_id, task_id, decision, reason, created_at) VALUES (@approvalId, @missionId, @taskId, @decision, @reason, @createdAt)`).run({ ...input, taskId: input.taskId ?? null, reason: input.reason ?? null, createdAt });
+    const gate = (input as { gate?: string }).gate ?? null;
+    this.database.prepare(`INSERT INTO orchestrator_approvals (approval_id, mission_id, task_id, decision, reason, created_at, gate) VALUES (@approvalId, @missionId, @taskId, @decision, @reason, @createdAt, @gate)`).run({ ...input, taskId: input.taskId ?? null, reason: input.reason ?? null, createdAt, gate });
     return { ...input, taskId: input.taskId ?? null, reason: input.reason ?? null, createdAt };
   }
 

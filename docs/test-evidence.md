@@ -48,10 +48,11 @@ This document records empirical test evidence captured during execution of the O
 
 | Task | Commit | Command | Exit | Notes / Review |
 |---|---|---|---|---|
-| TASK-004 | TBD | `pnpm.cmd exec vitest run tests/integration/mission-transitions.test.ts tests/integration/planner-dispatch.test.ts` | TBD | |
-| TASK-004 | TBD | `pnpm.cmd run test:unit` | TBD | |
-| TASK-004 | TBD | `pnpm.cmd run typecheck` | TBD | |
-| TASK-004 | TBD | `pnpm.cmd run lint` | TBD | |
+| TASK-004 | (this commit) | `pnpm.cmd exec vitest run tests/integration/mission-transitions.test.ts tests/integration/planner-dispatch.test.ts` | 0 | 8 mission transition tests + 9 planner dispatch tests pass |
+| TASK-004 | (this commit) | `pnpm.cmd run test:unit` | 0 | 92 unit tests pass (no regression) |
+| TASK-004 | (this commit) | `pnpm.cmd run test:integration` | 0 | 17 integration tests pass (was 9; +8 new mission transition tests) |
+| TASK-004 | (this commit) | `pnpm.cmd run typecheck` | 0 | Clean |
+| TASK-004 | (this commit) | `pnpm.cmd run lint` | 0 | Clean |
 
 ## TASK-005 — Workspace quality gates
 
