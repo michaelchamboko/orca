@@ -6,7 +6,7 @@ import { isAuthorizedBearer } from "./auth.js";
 
 export interface ControllerApiOptions {
   token: string;
-  metadata: ControllerRuntimeMetadata;
+  metadata: () => ControllerRuntimeMetadata;
   roster: PairedRoster;
   status: () => Promise<{ opencodeHealthy: boolean; bindingsCurrent: boolean; eventListening: boolean }>;
   shutdown: () => Promise<void>;
@@ -29,13 +29,14 @@ export function createControllerApi(options: ControllerApiOptions): FastifyInsta
 
 async function health(options: ControllerApiOptions): Promise<Record<string, unknown>> {
   const status = await options.status();
+  const metadata = options.metadata();
   return {
     healthy: true,
     ...status,
-    processIdentity: options.metadata.processIdentity,
-    version: options.metadata.version,
-    port: options.metadata.port,
-    createdAt: options.metadata.createdAt,
+    processIdentity: metadata.processIdentity,
+    version: metadata.version,
+    port: metadata.port,
+    createdAt: metadata.createdAt,
     bindingCount: options.roster.bindings.length,
     eventListening: status.eventListening
   };

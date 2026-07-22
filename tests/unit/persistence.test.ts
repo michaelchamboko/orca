@@ -375,4 +375,49 @@ describePersistence("sqlite persistence", () => {
       promptMessageId: "controller-message-missing"
     })).toThrow();
   });
+
+  it("retains historical rosters and demotes the previous current roster after a successful re-pairing", () => {
+    const firstRoster = createRoster();
+    const secondRoster: PairedRoster = {
+      ...firstRoster,
+      rosterId: "roster-2",
+      fingerprint: "roster-fingerprint-2",
+      pairedAt: "2025-01-02T00:00:00.000Z",
+      bindings: firstRoster.bindings.map((binding) => ({ ...binding, sessionId: binding.sessionId.replace("session-", "session-new-") }))
+    };
+
+    persistence.saveRoster(firstRoster);
+    persistence.saveRoster(secondRoster);
+
+    const history = persistence.listHistoricalRosters();
+    expect(history).toHaveLength(2);
+    expect(history.find((entry) => entry.rosterId === "roster-2")?.isCurrent).toBe(true);
+    expect(history.find((entry) => entry.rosterId === "roster-1")?.isCurrent).toBe(false);
+    expect(persistence.getCurrentRoster()?.rosterId).toBe("roster-2");
+  });
+
+  it("refuses re-pairing while a mission is active without deleting the current roster", () => {
+    const firstRoster = createRoster();
+    persistence.saveRoster(firstRoster);
+    persistence.createMission({
+      missionId: "mission-active-pair",
+      rosterId: firstRoster.rosterId,
+      objective: "in-progress mission",
+      sourceSessionMessageId: "source-active-pair",
+      state: "planning"
+    });
+
+    expect(persistence.hasActiveMission()).toBe(true);
+
+    const secondRoster: PairedRoster = {
+      ...firstRoster,
+      rosterId: "roster-blocked-pair",
+      fingerprint: "roster-fingerprint-blocked"
+    };
+
+    expect(() => persistence.saveRoster(secondRoster)).toThrow(/cannot re-pair while a mission is active/);
+
+    expect(persistence.getCurrentRoster()?.rosterId).toBe(firstRoster.rosterId);
+    expect(persistence.hasActiveMission()).toBe(true);
+  });
 });

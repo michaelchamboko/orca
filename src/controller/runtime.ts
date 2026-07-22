@@ -9,7 +9,7 @@ export interface ControllerRuntimeMetadata {
   schemaVersion: 1;
   pid: number;
   processIdentity: string;
-  port: typeof CONTROLLER_PORT;
+  port: typeof CONTROLLER_PORT | number;
   version: string;
   createdAt: string;
 }
@@ -129,7 +129,7 @@ function isRuntimeMetadata(value: unknown): value is ControllerRuntimeMetadata {
   return metadata.schemaVersion === 1
     && Number.isInteger(metadata.pid) && (metadata.pid as number) > 0
     && typeof metadata.processIdentity === "string" && metadata.processIdentity.length >= 16
-    && metadata.port === CONTROLLER_PORT
+    && (metadata.port === CONTROLLER_PORT || metadata.port === 0 || (typeof metadata.port === "number" && Number.isInteger(metadata.port) && (metadata.port as number) > 0 && (metadata.port as number) < 65536))
     && typeof metadata.version === "string" && metadata.version.length > 0
     && typeof metadata.createdAt === "string" && !Number.isNaN(Date.parse(metadata.createdAt));
 }

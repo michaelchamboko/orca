@@ -447,15 +447,39 @@ export class SqlitePersistence {
 
   public saveRoster(roster: PairedRoster): void {
     this.runInTransaction(() => {
-      this.database.exec("DELETE FROM session_bindings; DELETE FROM rosters;");
-      this.database.prepare(`INSERT INTO rosters (roster_id, fingerprint, server_base_url, project_root, paired_at) VALUES (@rosterId, @fingerprint, @serverBaseUrl, @projectRoot, @pairedAt)`).run({ rosterId: roster.rosterId, fingerprint: roster.fingerprint, serverBaseUrl: roster.serverBaseUrl, projectRoot: roster.projectRoot, pairedAt: roster.pairedAt });
+      this.assertNoActiveMissionForRosterHistory();
+      this.database.prepare(`UPDATE rosters SET is_current = 0 WHERE is_current = 1`).run();
+      this.database.prepare(`INSERT INTO rosters (roster_id, fingerprint, server_base_url, project_root, paired_at, is_current) VALUES (@rosterId, @fingerprint, @serverBaseUrl, @projectRoot, @pairedAt, 1)`).run({ rosterId: roster.rosterId, fingerprint: roster.fingerprint, serverBaseUrl: roster.serverBaseUrl, projectRoot: roster.projectRoot, pairedAt: roster.pairedAt });
       const statement = this.database.prepare(`INSERT INTO session_bindings (roster_id, position, role, session_id, model_provider_id, model_id, agent_name, project_root, project_fingerprint, server_base_url, session_created_at, paired_at, role_prompt_hash, expected_title) VALUES (@rosterId, @position, @role, @sessionId, @modelProviderId, @modelId, @agentName, @projectRoot, @projectFingerprint, @serverBaseUrl, @sessionCreatedAt, @pairedAt, @rolePromptHash, @expectedTitle)`);
       for (const binding of roster.bindings) statement.run({ rosterId: roster.rosterId, position: binding.position, role: binding.role, sessionId: binding.sessionId, modelProviderId: binding.model.providerId, modelId: binding.model.modelId, agentName: binding.agentName, projectRoot: binding.projectRoot, projectFingerprint: binding.projectFingerprint, serverBaseUrl: binding.serverBaseUrl, sessionCreatedAt: binding.sessionCreatedAt, pairedAt: binding.pairedAt, rolePromptHash: binding.rolePromptHash, expectedTitle: binding.expectedTitle });
     });
   }
 
+  private assertNoActiveMissionForRosterHistory(): void {
+    const active = this.database.prepare(`
+      SELECT COUNT(*) as count FROM mission_metadata
+      WHERE state NOT IN (${activeMissionStatesSql})
+    `).get() as { count: number };
+    if (active.count > 0) throw new Error("cannot re-pair while a mission is active");
+  }
+
+  public hasActiveMission(): boolean {
+    const row = this.database.prepare(`
+      SELECT COUNT(*) as count FROM mission_metadata
+      WHERE state NOT IN (${activeMissionStatesSql})
+    `).get() as { count: number };
+    return row.count > 0;
+  }
+
+  public listHistoricalRosters(): Array<{ rosterId: string; fingerprint: string; pairedAt: string; isCurrent: boolean }> {
+    const rows = this.database.prepare(`
+      SELECT roster_id, fingerprint, paired_at, is_current FROM rosters ORDER BY paired_at DESC
+    `).all() as Array<{ roster_id: string; fingerprint: string; paired_at: string; is_current: number }>;
+    return rows.map((row) => ({ rosterId: row.roster_id, fingerprint: row.fingerprint, pairedAt: row.paired_at, isCurrent: row.is_current === 1 }));
+  }
+
   public getCurrentRoster(): PairedRoster | null {
-    const roster = this.database.prepare(`SELECT roster_id, fingerprint, server_base_url, project_root, paired_at FROM rosters ORDER BY paired_at DESC LIMIT 1`).get() as { roster_id: string; fingerprint: string; server_base_url: string; project_root: string; paired_at: string } | undefined;
+    const roster = this.database.prepare(`SELECT roster_id, fingerprint, server_base_url, project_root, paired_at FROM rosters WHERE is_current = 1 ORDER BY paired_at DESC LIMIT 1`).get() as { roster_id: string; fingerprint: string; server_base_url: string; project_root: string; paired_at: string } | undefined;
     if (!roster) return null;
     const bindings = this.database.prepare(`SELECT position, role, session_id, model_provider_id, model_id, agent_name, project_root, project_fingerprint, server_base_url, session_created_at, paired_at, role_prompt_hash, expected_title FROM session_bindings WHERE roster_id = @rosterId ORDER BY position ASC`).all({ rosterId: roster.roster_id }) as Array<{ position: 1 | 2 | 3 | 4 | 5; role: Role; session_id: string; model_provider_id: string; model_id: string; agent_name: string; project_root: string; project_fingerprint: string; server_base_url: string; session_created_at: string; paired_at: string; role_prompt_hash: string; expected_title: string }>;
     return { rosterId: roster.roster_id, fingerprint: roster.fingerprint, serverBaseUrl: roster.server_base_url, projectRoot: roster.project_root, pairedAt: roster.paired_at, bindings: bindings.map((binding) => ({ sessionId: binding.session_id, position: binding.position, role: binding.role, model: { providerId: binding.model_provider_id, modelId: binding.model_id }, agentName: binding.agent_name, projectRoot: binding.project_root, projectFingerprint: binding.project_fingerprint, serverBaseUrl: binding.server_base_url, sessionCreatedAt: binding.session_created_at, pairedAt: binding.paired_at, rolePromptHash: binding.role_prompt_hash, expectedTitle: binding.expected_title })) };
@@ -603,7 +627,8 @@ export class SqlitePersistence {
     const migrations = [
       { version: 1, sql: initialSchemaSql },
       { version: 2, sql: liveWorkflowSchemaSql },
-      { version: 3, sql: completionRecoverySchemaSql }
+      { version: 3, sql: completionRecoverySchemaSql },
+      { version: 4, sql: rosterHistorySchemaSql }
     ];
     for (const migration of migrations) {
       if (applied.has(migration.version)) continue;
@@ -797,4 +822,12 @@ const completionRecoverySchemaSql = `
     FOREIGN KEY (task_id) REFERENCES tasks (task_id) ON DELETE CASCADE
   );
   CREATE INDEX IF NOT EXISTS idx_controller_event_ledger_task ON controller_event_ledger (task_id, id);
+`;
+
+const rosterHistorySchemaSql = `
+  ALTER TABLE rosters ADD COLUMN is_current INTEGER NOT NULL DEFAULT 0;
+  UPDATE rosters SET is_current = 1 WHERE is_current = 0
+    AND roster_id = (SELECT roster_id FROM rosters ORDER BY paired_at DESC LIMIT 1);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_rosters_is_current
+    ON rosters (is_current) WHERE is_current = 1;
 `;

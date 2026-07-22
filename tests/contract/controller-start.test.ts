@@ -23,7 +23,7 @@ afterEach(async () => {
 
 describe("authenticated controller startup", () => {
   it("binds only the required loopback address and rejects unauthenticated requests", async () => {
-    const controller = await runningController();
+    const controller = await runningController({ ephemeralPort: false });
 
     expect(controller.address).toEqual({ host: "127.0.0.1", port: 4317 });
     expect(readFileSync(join(controller.projectRoot, ".opencode", "agents", "orca-orchestrator.md"), "utf8")).not.toMatch(/^model:/m);
@@ -43,9 +43,9 @@ describe("authenticated controller startup", () => {
   });
 
   it("rejects a second start after validating the existing authenticated runtime", async () => {
-    const first = await runningController();
+    const first = await runningController({ ephemeralPort: true });
 
-    await expect(startController(first.options)).rejects.toThrow("controller is already running");
+    await expect(startController({ ...first.options, port: 0 })).rejects.toThrow("controller is already running");
   });
 
   it("shuts down gracefully and removes its runtime state", async () => {
@@ -63,7 +63,7 @@ describe("authenticated controller startup", () => {
     writeFileSync(join(setup.projectRoot, ".orca", "controller.json"), JSON.stringify({ schemaVersion: 1, pid: process.pid, processIdentity: "reused-process", port: 4317, version: "0.1.0", createdAt: "2026-01-01T00:00:00.000Z" }));
     writeFileSync(join(setup.projectRoot, ".orca", "controller-token"), "stale-token");
 
-    const controller = await startController(setup.options);
+    const controller = await startController({ ...setup.options, port: 0 });
     controllers.push(controller);
 
     expect(controller.token).not.toBe("stale-token");
@@ -101,7 +101,7 @@ describe("authenticated controller startup", () => {
     const setup = controllerSetup();
     await setup.rosterService.pair();
 
-    const results = await Promise.allSettled([startController(setup.options), startController(setup.options)]);
+    const results = await Promise.allSettled([startController({ ...setup.options, port: 4317 }), startController({ ...setup.options, port: 4317 })]);
     const winner = results.find((result): result is PromiseFulfilledResult<Awaited<ReturnType<typeof startController>>> => result.status === "fulfilled")?.value;
 
     expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
@@ -120,10 +120,10 @@ describe("authenticated controller startup", () => {
   });
 });
 
-async function runningController() {
+async function runningController(options: { ephemeralPort?: boolean } = { ephemeralPort: true }) {
   const setup = controllerSetup();
   await setup.rosterService.pair();
-  const controller = await startController(setup.options);
+  const controller = await startController({ ...setup.options, port: options.ephemeralPort === false ? 4317 : 0 });
   controllers.push(controller);
   return { ...controller, projectRoot: setup.projectRoot, options: setup.options };
 }

@@ -141,6 +141,8 @@ describe("workflow policy", () => {
     expect(nextTaskStateFromMissionState("planning")).toBe("running");
     expect(nextTaskStateFromMissionState("awaiting_plan_approval")).toBe("awaiting_permission");
     expect(nextTaskStateFromMissionState("completed")).toBe("approved");
-    expect(nextTaskStateFromMissionState("blocked")).toBe("approved");
+    expect(nextTaskStateFromMissionState("blocked")).toBe("blocked");
+    expect(nextTaskStateFromMissionState("failed")).toBe("failed");
+    expect(nextTaskStateFromMissionState("cancelled")).toBe("cancelled");
   });
 });

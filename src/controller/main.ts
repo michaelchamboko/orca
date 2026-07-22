@@ -38,7 +38,7 @@ export interface StartControllerOptions {
 export interface RunningController {
   readonly api: FastifyInstance;
   readonly token: string;
-  readonly address: { host: typeof CONTROLLER_HOST; port: typeof CONTROLLER_PORT };
+  readonly address: { host: typeof CONTROLLER_HOST; port: number };
   stop(): Promise<void>;
 }
 
@@ -88,10 +88,12 @@ export async function controllerStatus(projectRoot: string): Promise<ControllerS
 }
 
 export async function startController(options: StartControllerOptions): Promise<RunningController> {
-  if (options.port !== undefined && options.port !== CONTROLLER_PORT) throw new Error(`controller must bind ${CONTROLLER_HOST}:${CONTROLLER_PORT}`);
+  const requestedPort = options.port ?? CONTROLLER_PORT;
+  if (requestedPort !== CONTROLLER_PORT && requestedPort !== 0) throw new Error(`controller must bind ${CONTROLLER_HOST}:${CONTROLLER_PORT}`);
   const claim = claimControllerStart(options.projectRoot, randomUUID());
   let api: FastifyInstance | undefined;
   let metadata: ControllerRuntimeMetadata | undefined;
+  let boundPort: number = requestedPort;
   try {
     await rejectOrCleanRuntime(options.projectRoot);
     await validateStartup(options);
@@ -113,7 +115,7 @@ export async function startController(options: StartControllerOptions): Promise<
     schemaVersion: 1,
     pid: process.pid,
     processIdentity: randomUUID(),
-    port: CONTROLLER_PORT,
+    port: requestedPort === 0 ? 0 : CONTROLLER_PORT,
     version: options.version,
     createdAt: new Date().toISOString()
     };
@@ -127,7 +129,10 @@ export async function startController(options: StartControllerOptions): Promise<
     };
     api = createControllerApi({
     token,
-    metadata,
+    metadata: () => {
+      if (!metadata) throw new Error("controller metadata not initialized");
+      return metadata;
+    },
     roster,
     shutdown: stop,
     status: async () => ({
@@ -136,10 +141,15 @@ export async function startController(options: StartControllerOptions): Promise<
       eventListening: events.eventListening
     })
   });
-    await api.listen({ host: CONTROLLER_HOST, port: CONTROLLER_PORT });
+    const listenOptions = requestedPort === 0 ? { host: CONTROLLER_HOST, port: 0 } : { host: CONTROLLER_HOST, port: CONTROLLER_PORT };
+    const address = await api.listen(listenOptions);
+    if (address) {
+      boundPort = typeof address === "string" ? Number(new URL(address).port) : Number((address as { port: number }).port);
+    }
+    metadata = { ...metadata, port: boundPort === 0 ? 0 : (boundPort === CONTROLLER_PORT ? CONTROLLER_PORT : boundPort) };
     await events.start();
     writeControllerRuntime(options.projectRoot, metadata, token);
-    return { api, token, address: { host: CONTROLLER_HOST, port: CONTROLLER_PORT }, stop };
+    return { api, token, address: { host: CONTROLLER_HOST, port: boundPort }, stop };
   } catch (error) {
     await api?.close();
     if (metadata) removeControllerRuntime(options.projectRoot, metadata.processIdentity);

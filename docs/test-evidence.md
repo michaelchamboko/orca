@@ -18,9 +18,11 @@ This document records empirical test evidence captured during execution of the O
 
 | Task | Commit | Command | Exit | Notes / Review |
 |---|---|---|---|---|
-| TASK-001 | TBD | `pnpm.cmd exec vitest run tests/unit/persistence.test.ts tests/unit/domain-workflow.test.ts tests/contract/controller-start.test.ts` | TBD | |
-| TASK-001 | TBD | `pnpm.cmd run lint` | TBD | |
-| TASK-001 | TBD | `pnpm.cmd run typecheck` | TBD | |
+| TASK-001 | (this commit) | `pnpm.cmd exec vitest run tests/unit/persistence.test.ts tests/unit/domain-workflow.test.ts tests/contract/controller-start.test.ts` | 0 | 35 tests passed (persistence: 15, workflow: 10, controller-start: 10) |
+| TASK-001 | (this commit) | `pnpm.cmd run lint` | 0 | Clean (added `.gitnexus/**` and `.orca/**` to ESLint ignores; declared `URL` global) |
+| TASK-001 | (this commit) | `pnpm.cmd run typecheck` | 0 | Clean |
+| TASK-001 | (this commit) | `pnpm.cmd run test:unit` | 0 | 75 tests passed (was 73; +2 for roster history + re-pair guard) |
+| TASK-001 | (this commit) | `pnpm.cmd run build` | 0 | Three ESM bundles built |
 
 ## TASK-002 — Harden worker completion
 
