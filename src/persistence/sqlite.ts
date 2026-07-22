@@ -99,6 +99,27 @@ export interface DispatchOutboxAction extends DispatchInput {
   updatedAt: string;
   acknowledgedAt: string | null;
   lastError: string | null;
+  taskId?: string | null;
+  purpose?: string | null;
+  parentPromptMessageId?: string | null;
+}
+
+export type DispatchPurpose = "worker_task" | "contract_repair" | "orchestrator_decision" | "final_completion" | "status_notice";
+
+export interface TaskPromptAttemptRecord {
+  taskId: string;
+  promptMessageId: string;
+  purpose: "worker_task" | "contract_repair";
+  attempt: number;
+  acknowledgedAt: string | null;
+  createdAt: string;
+}
+
+export interface EnqueueDispatchWithPromptInput extends DispatchInput {
+  taskId: string;
+  purpose: DispatchPurpose;
+  parentPromptMessageId?: string;
+  promptPayload?: Record<string, JsonLike>;
 }
 
 export interface CreateMissionTaskAndDispatchInput {
@@ -388,6 +409,61 @@ export class SqlitePersistence {
     if (info.changes !== 1) throw new Error(`task execution not found: ${taskId}`);
   }
 
+  public recordTaskPromptAttempt(taskId: string, promptMessageId: string, purpose: "worker_task" | "contract_repair", attempt: number, acknowledgedAt: string | null = null): TaskPromptAttemptRecord {
+    const createdAt = nowIso();
+    this.database.prepare(`
+      INSERT INTO task_prompt_attempts (task_id, prompt_message_id, purpose, attempt, acknowledged_at, created_at)
+      VALUES (@taskId, @promptMessageId, @purpose, @attempt, @acknowledgedAt, @createdAt)
+      ON CONFLICT (task_id, prompt_message_id) DO UPDATE SET
+        purpose = excluded.purpose,
+        attempt = excluded.attempt,
+        acknowledged_at = excluded.acknowledged_at
+    `).run({ taskId, promptMessageId, purpose, attempt, acknowledgedAt, createdAt });
+    return { taskId, promptMessageId, purpose, attempt, acknowledgedAt, createdAt };
+  }
+
+  public getTaskPromptAttempts(taskId: string): TaskPromptAttemptRecord[] {
+    const rows = this.database.prepare(`
+      SELECT task_id, prompt_message_id, purpose, attempt, acknowledged_at, created_at
+      FROM task_prompt_attempts WHERE task_id = @taskId ORDER BY created_at ASC
+    `).all({ taskId }) as Array<{ task_id: string; prompt_message_id: string; purpose: "worker_task" | "contract_repair"; attempt: number; acknowledged_at: string | null; created_at: string }>;
+    return rows.map((row) => ({ taskId: row.task_id, promptMessageId: row.prompt_message_id, purpose: row.purpose, attempt: row.attempt, acknowledgedAt: row.acknowledged_at, createdAt: row.created_at }));
+  }
+
+  public acknowledgeTaskPromptAttempt(taskId: string, promptMessageId: string, timestamp: string = nowIso()): void {
+    const result = this.database.prepare(`
+      UPDATE task_prompt_attempts SET acknowledged_at = @timestamp WHERE task_id = @taskId AND prompt_message_id = @promptMessageId
+    `).run({ taskId, promptMessageId, timestamp });
+    if (result.changes !== 1) throw new Error(`task prompt attempt not found: ${taskId}:${promptMessageId}`);
+  }
+
+  /**
+   * Atomic completion: persists the task output, the parsed result, the durable
+   * controller event, and the prompt attempt acknowledgement in one transaction
+   * so a crash anywhere rolls the whole record back.
+   */
+  public completeTaskExecutionAtomically(taskId: string, outputMessageId: string, result: RoleWorkerResult, eventPayload: Record<string, JsonLike>): void {
+    this.runInTransaction(() => {
+      const timestamp = nowIso();
+      const info = this.database.prepare(`
+        UPDATE tasks SET state = 'completed', result = @result, updated_at = @timestamp, completed_at = @timestamp WHERE task_id = @taskId
+      `).run({ taskId, result: toJsonString(result), timestamp });
+      if (info.changes === 0) throw new Error(`task not found: ${taskId}`);
+      this.database.prepare(`
+        UPDATE task_execution_metadata
+        SET worker_output_message_id = @outputMessageId, state = 'completed', result = @result, updated_at = @timestamp
+        WHERE task_id = @taskId
+      `).run({ taskId, outputMessageId, result: toJsonString(result), timestamp });
+      this.database.prepare(`
+        INSERT INTO controller_event_ledger (task_id, event_type, payload, created_at) VALUES (@taskId, 'worker.completed', @payload, @timestamp)
+      `).run({ taskId, payload: toJsonString(eventPayload), timestamp });
+      this.database.prepare(`
+        UPDATE task_prompt_attempts SET acknowledged_at = @timestamp
+        WHERE task_id = @taskId AND acknowledged_at IS NULL
+      `).run({ taskId, timestamp });
+    });
+  }
+
   public blockTaskExecution(taskId: string, reason: string): void {
     this.runInTransaction(() => {
       const task = this.getTaskExecution(taskId);
@@ -628,7 +704,8 @@ export class SqlitePersistence {
       { version: 1, sql: initialSchemaSql },
       { version: 2, sql: liveWorkflowSchemaSql },
       { version: 3, sql: completionRecoverySchemaSql },
-      { version: 4, sql: rosterHistorySchemaSql }
+      { version: 4, sql: rosterHistorySchemaSql },
+      { version: 5, sql: completionHardeningSchemaSql }
     ];
     for (const migration of migrations) {
       if (applied.has(migration.version)) continue;
@@ -830,4 +907,22 @@ const rosterHistorySchemaSql = `
     AND roster_id = (SELECT roster_id FROM rosters ORDER BY paired_at DESC LIMIT 1);
   CREATE UNIQUE INDEX IF NOT EXISTS idx_rosters_is_current
     ON rosters (is_current) WHERE is_current = 1;
+`;
+
+const completionHardeningSchemaSql = `
+  ALTER TABLE dispatch_outbox ADD COLUMN task_id TEXT REFERENCES tasks (task_id) ON DELETE SET NULL;
+  ALTER TABLE dispatch_outbox ADD COLUMN purpose TEXT NOT NULL DEFAULT 'worker_task';
+  ALTER TABLE dispatch_outbox ADD COLUMN parent_prompt_message_id TEXT;
+  ALTER TABLE dispatch_outbox ADD COLUMN prompt_payload TEXT NOT NULL DEFAULT '{}';
+  CREATE TABLE IF NOT EXISTS task_prompt_attempts (
+    task_id TEXT NOT NULL,
+    prompt_message_id TEXT NOT NULL,
+    purpose TEXT NOT NULL CHECK (purpose IN ('worker_task', 'contract_repair')),
+    attempt INTEGER NOT NULL,
+    acknowledged_at TEXT,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (task_id, prompt_message_id),
+    FOREIGN KEY (task_id) REFERENCES tasks (task_id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_prompt_attempts_task ON task_prompt_attempts (task_id);
 `;

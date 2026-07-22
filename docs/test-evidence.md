@@ -28,9 +28,11 @@ This document records empirical test evidence captured during execution of the O
 
 | Task | Commit | Command | Exit | Notes / Review |
 |---|---|---|---|---|
-| TASK-002 | TBD | `pnpm.cmd exec vitest run tests/unit/worker-completion.test.ts tests/integration/worker-completion-recovery.test.ts` | TBD | |
-| TASK-002 | TBD | `pnpm.cmd run typecheck` | TBD | |
-| TASK-002 | TBD | `pnpm.cmd run lint` | TBD | |
+| TASK-002 | (this commit) | `pnpm.cmd exec vitest run tests/unit/worker-completion.test.ts` | 0 | 13 tests pass (was 7; +6: repair-with-new-prompt-id, repeated invalid, active lineage, restart durability, timeout from createdAt, completion rollback) |
+| TASK-002 | (this commit) | `pnpm.cmd run test:unit` | 0 | 81 tests pass (was 75; +6 net) |
+| TASK-002 | (this commit) | `pnpm.cmd run test:integration` | 0 | 9 tests pass (planner dispatch unchanged) |
+| TASK-002 | (this commit) | `pnpm.cmd run typecheck` | 0 | Clean |
+| TASK-002 | (this commit) | `pnpm.cmd run lint` | 0 | Clean |
 
 ## TASK-003 — Orchestrator actions
 

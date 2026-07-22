@@ -164,6 +164,12 @@ class MemoryPersistence implements WorkflowPersistence {
   getMission() { return null; }
   saveControllerCheckpoint(): void {}
   getControllerCheckpoint() { return null; }
+  recordTaskPromptAttempt(taskId: string, promptMessageId: string) { return { taskId, promptMessageId, purpose: "worker_task" as const, attempt: 1, acknowledgedAt: null, createdAt: new Date().toISOString() }; }
+  getTaskPromptAttempts() { return []; }
+  acknowledgeTaskPromptAttempt(): void {}
+  completeTaskExecutionAtomically(): void {}
+  runInTransaction<T>(operation: () => T): T { return operation(); }
+  hasActiveMission(): boolean { return false; }
 }
 
 class MutableAdapter implements OpenCodeLiveAdapter {

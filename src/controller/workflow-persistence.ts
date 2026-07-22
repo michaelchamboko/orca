@@ -4,6 +4,7 @@ import type {
   DispatchOutboxAction,
   ProcessedMessageInput,
   TaskExecutionRecord,
+  TaskPromptAttemptRecord,
   WorkspaceSnapshot
 } from "../persistence/sqlite.js";
 import type { TaskState } from "../domain/types.js";
@@ -31,4 +32,10 @@ export interface WorkflowPersistence extends RosterPersistence {
   getMission(missionId: string): import("../persistence/sqlite.js").MissionDataRecord | null;
   saveControllerCheckpoint(input: import("../persistence/sqlite.js").ControllerCheckpointInput): void;
   getControllerCheckpoint(cursorKey: string): import("../persistence/sqlite.js").ControllerCheckpoint | null;
+  recordTaskPromptAttempt(taskId: string, promptMessageId: string, purpose: "worker_task" | "contract_repair", attempt: number, acknowledgedAt?: string | null): TaskPromptAttemptRecord;
+  getTaskPromptAttempts(taskId: string): TaskPromptAttemptRecord[];
+  acknowledgeTaskPromptAttempt(taskId: string, promptMessageId: string, timestamp?: string): void;
+  completeTaskExecutionAtomically(taskId: string, outputMessageId: string, result: import("../domain/types.js").RoleWorkerResult, eventPayload: Record<string, unknown>): void;
+  runInTransaction<T>(operation: () => T): T;
+  hasActiveMission(): boolean;
 }
