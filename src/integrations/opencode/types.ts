@@ -33,10 +33,11 @@ export interface SessionStatus {
 }
 
 export interface SessionPrompt {
+  messageId: string;
   sessionId: string;
   content: string;
-  agent?: string;
-  model?: ModelRef;
+  agent: string;
+  model: ModelRef;
 }
 
 export interface DeliveredTask {
@@ -45,7 +46,26 @@ export interface DeliveredTask {
 }
 
 export interface OpenCodeEvent {
-  sessionId: string;
+  directory?: string;
+  sessionId?: string;
+  messageId?: string;
   type: string;
   payload?: unknown;
+}
+
+export interface OpenCodeMessagePart {
+  id: string;
+  type: string;
+  text?: string;
+  toolStatus?: "pending" | "running" | "completed" | "error";
+}
+
+export interface OpenCodeMessage {
+  id: string;
+  sessionId: string;
+  role: "user" | "assistant";
+  parentId?: string;
+  createdAt: string;
+  completedAt?: string;
+  parts: OpenCodeMessagePart[];
 }

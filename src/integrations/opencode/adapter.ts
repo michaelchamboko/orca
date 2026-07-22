@@ -1,6 +1,7 @@
 import type {
   DeliveredTask,
   OpenCodeEvent,
+  OpenCodeMessage,
   OpenCodeSession,
   SessionPrompt,
   SessionStatus
@@ -9,6 +10,8 @@ import type {
 export type {
   DeliveredTask,
   OpenCodeEvent,
+  OpenCodeMessage,
+  OpenCodeMessagePart,
   OpenCodeSession,
   SessionPrompt,
   SessionStatus
@@ -25,6 +28,8 @@ export interface OpenCodeAdapter {
 export interface OpenCodeLiveAdapter extends OpenCodeAdapter {
   health(): Promise<{ healthy: boolean; version?: string }>;
   getSessionModel(sessionId: string): Promise<ModelRef>;
+  listMessages(sessionId: string, limit?: number): Promise<OpenCodeMessage[]>;
+  getMessage(sessionId: string, messageId: string): Promise<OpenCodeMessage>;
   sendPrompt(input: SessionPrompt): Promise<void>;
   subscribeEvents(signal: AbortSignal): AsyncIterable<OpenCodeEvent>;
 }

@@ -53,11 +53,14 @@ describe("buildCliProgram", () => {
     ).rejects.toMatchObject({ code: "commander.unknownCommand", exitCode: 1 });
   });
 
-  test("prints role, title, short session ID, and model before confirmation", () => {
-    expect(formatPairConfirmation([
+  test("prints the user-selected paired models before confirmation", () => {
+    const confirmation = formatPairConfirmation([
       { id: "abcdefghijk", title: "Orchestrator tab", model: { providerId: "openai", modelId: "gpt-5" } },
-      { id: "plannersess", title: "Planner tab", model: { providerId: "anthropic", modelId: "claude" } }
-    ])).toContain("1 | orchestrator | Orchestrator tab | abcdefgh | openai/gpt-5");
+      { id: "plannersess", title: "Planner tab", model: { providerId: "opencode", modelId: "north-mini-code-free" } }
+    ]);
+
+    expect(confirmation).toContain("1 | orchestrator | Orchestrator tab | abcdefgh | openai/gpt-5");
+    expect(confirmation).toContain("2 | planner | Planner tab | planners | opencode/north-mini-code-free");
   });
 
   test("routes all controller lifecycle commands to configured handlers", async () => {

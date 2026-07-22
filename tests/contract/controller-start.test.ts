@@ -11,6 +11,7 @@ import type { OpenCodeEvent, OpenCodeSession, SessionPrompt, SessionStatus } fro
 import { RosterService } from "../../src/pairing/roster-service.js";
 import { renderRoleProfile } from "../../src/roles/installer.js";
 import { roleProfiles } from "../../src/roles/profiles.js";
+import type { WorkflowPersistence } from "../../src/controller/workflow-persistence.js";
 
 const workspaces: string[] = [];
 const controllers: Array<{ stop(): Promise<void> }> = [];
@@ -25,6 +26,7 @@ describe("authenticated controller startup", () => {
     const controller = await runningController();
 
     expect(controller.address).toEqual({ host: "127.0.0.1", port: 4317 });
+    expect(readFileSync(join(controller.projectRoot, ".opencode", "agents", "orca-orchestrator.md"), "utf8")).not.toMatch(/^model:/m);
     expect((await controller.api.inject({ method: "GET", url: "/health" })).statusCode).toBe(401);
     expect((await controller.api.inject({ method: "GET", url: "/health", headers: { authorization: `Bearer ${controller.token}` } })).json()).toMatchObject({ healthy: true, opencodeHealthy: true, bindingsCurrent: true, bindingCount: 5 });
   });
@@ -139,11 +141,24 @@ function controllerSetup() {
   return { projectRoot, sessions, adapter, persistence, rosterService, options: { projectRoot, adapter, persistence, version: "0.1.0" } };
 }
 
-class MemoryPersistence {
+class MemoryPersistence implements WorkflowPersistence {
   private roster: PairedRoster | null = null;
 
   saveRoster(roster: PairedRoster): void { this.roster = roster; }
   getCurrentRoster(): PairedRoster | null { return this.roster; }
+  createMissionTaskAndDispatch(): never { throw new Error("workflow persistence is not exercised by this startup fixture"); }
+  recordProcessedMessage(): boolean { return true; }
+  claimNextDispatch() { return null; }
+  acknowledgeDispatch(): void {}
+  releaseDispatch(): void {}
+  getPendingDispatches() { return []; }
+  getTaskExecutionByPromptMessageId() { return null; }
+  saveWorkspaceSnapshot(): never { throw new Error("workflow persistence is not exercised by this startup fixture"); }
+  setTaskExecutionState(): void {}
+  setMissionFailure(): void {}
+  getMission() { return null; }
+  saveControllerCheckpoint(): void {}
+  getControllerCheckpoint() { return null; }
 }
 
 class MutableAdapter implements OpenCodeLiveAdapter {
@@ -153,6 +168,8 @@ class MutableAdapter implements OpenCodeLiveAdapter {
 
   async listSessions(): Promise<OpenCodeSession[]> { return this.sessions.map((session) => ({ ...session, model: { ...session.model } })); }
   async getSessionModel(sessionId: string) { return { ...this.requireSession(sessionId).model }; }
+  async listMessages(sessionId: string): Promise<[]> { this.requireSession(sessionId); return []; }
+  async getMessage(sessionId: string, messageId: string): Promise<never> { this.requireSession(sessionId); throw new Error(`unknown message ${messageId}`); }
   async sendPrompt(input: SessionPrompt): Promise<void> { this.requireSession(input.sessionId); }
   async deliverTask(sessionId: string): Promise<void> { this.requireSession(sessionId); }
   async getSessionStatus(sessionId: string): Promise<SessionStatus> { const session = this.requireSession(sessionId); return { idle: session.status === "idle", inFlightToolCalls: session.inFlightToolCalls }; }

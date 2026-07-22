@@ -4,10 +4,15 @@ import { createHash } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 
 import type { OpenCodeLiveAdapter } from "../integrations/opencode/adapter.js";
-import { RosterService, type RosterPersistence } from "../pairing/roster-service.js";
+import { RosterService } from "../pairing/roster-service.js";
 import { roleProfiles } from "../roles/profiles.js";
 import { generateBearerToken } from "./auth.js";
 import { createControllerApi } from "./api.js";
+import { EventRuntime } from "./event-runtime.js";
+import { WorkerCompletionService } from "./worker-completion.js";
+import { MissionIngress } from "./mission-ingress.js";
+import { PlannerDispatchOutbox } from "./planner-dispatch.js";
+import type { WorkflowPersistence } from "./workflow-persistence.js";
 import {
   CONTROLLER_HOST,
   CONTROLLER_PORT,
@@ -25,7 +30,7 @@ import {
 export interface StartControllerOptions {
   projectRoot: string;
   adapter: OpenCodeLiveAdapter;
-  persistence: RosterPersistence;
+  persistence: WorkflowPersistence;
   version: string;
   port?: number;
 }
@@ -92,6 +97,17 @@ export async function startController(options: StartControllerOptions): Promise<
     await validateStartup(options);
 
     const roster = await new RosterService(options.adapter, options.persistence).assertCurrent();
+    const rosterService = new RosterService(options.adapter, options.persistence);
+    const dispatch = new PlannerDispatchOutbox(options.adapter, options.persistence, rosterService);
+    const completion = new WorkerCompletionService(options.adapter, options.persistence, {
+      assertWorkerBinding: async (task) => {
+        const current = await rosterService.assertCurrent();
+        const binding = current.bindings.find((candidate) => candidate.role === task.role);
+        if (!binding || binding.sessionId !== task.targetSessionId) throw new Error("roster drift");
+        return { agent: `orca-${binding.role}`, model: { ...binding.model } };
+      }
+    });
+    const events = new EventRuntime(options.adapter, new MissionIngress(options.projectRoot, options.adapter, options.persistence, rosterService, dispatch), dispatch, completion);
     const token = generateBearerToken();
     metadata = {
     schemaVersion: 1,
@@ -105,6 +121,7 @@ export async function startController(options: StartControllerOptions): Promise<
     const stop = async (): Promise<void> => {
       if (stopped) return;
       stopped = true;
+      await events.stop();
       await api?.close();
       removeControllerRuntime(options.projectRoot, metadata?.processIdentity);
     };
@@ -115,10 +132,12 @@ export async function startController(options: StartControllerOptions): Promise<
     shutdown: stop,
     status: async () => ({
       opencodeHealthy: await options.adapter.health().then((health) => health.healthy).catch(() => false),
-      bindingsCurrent: await new RosterService(options.adapter, options.persistence).assertCurrent().then(() => true).catch(() => false)
+      bindingsCurrent: await new RosterService(options.adapter, options.persistence).assertCurrent().then(() => true).catch(() => false),
+      eventListening: events.eventListening
     })
   });
     await api.listen({ host: CONTROLLER_HOST, port: CONTROLLER_PORT });
+    await events.start();
     writeControllerRuntime(options.projectRoot, metadata, token);
     return { api, token, address: { host: CONTROLLER_HOST, port: CONTROLLER_PORT }, stop };
   } catch (error) {
@@ -153,5 +172,5 @@ async function validateStartup(options: StartControllerOptions): Promise<void> {
 }
 
 function renderProfile(profile: (typeof roleProfiles)[number]): string {
-  return `---\ndescription: ORCA ${profile.role} role\nmode: ${profile.mode}\nmodel: ${profile.model}\ntools:\n${profile.tools.map((tool) => `  ${tool}: true`).join("\n")}\n---\n\n${profile.instructions}\n`;
+  return `---\ndescription: ORCA ${profile.role} role\nmode: ${profile.mode}\ntools:\n${profile.tools.map((tool) => `  ${tool}: true`).join("\n")}\n---\n\n${profile.instructions}\n`;
 }

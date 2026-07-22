@@ -1,18 +1,16 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`interactive live-session pairing > installs role profiles pinned to minimax-coding-plan/MiniMax-M3 with the exact per-role tool grants 1`] = `
+exports[`interactive live-session pairing > installs model-free role profiles with the exact per-role tool grants 1`] = `
 [
   "---
 description: ORCA orchestrator role
 mode: primary
-model: minimax-coding-plan/MiniMax-M3
 tools:
   read: true
   glob: true
   grep: true
   webfetch: true
   websearch: true
-  task: true
   todowrite: true
   skill: true
 ---
@@ -22,7 +20,6 @@ You are ORCA's orchestrator. Return a structured controller result with summary,
   "---
 description: ORCA planner role
 mode: primary
-model: minimax-coding-plan/MiniMax-M3
 tools:
   read: true
   glob: true
@@ -38,7 +35,6 @@ You are ORCA's planner. Return a structured controller result with summary, file
   "---
 description: ORCA builder role
 mode: primary
-model: minimax-coding-plan/MiniMax-M3
 tools:
   bash: true
   read: true
@@ -56,7 +52,6 @@ You are ORCA's builder. Return a structured controller result with summary, file
   "---
 description: ORCA reviewer role
 mode: primary
-model: minimax-coding-plan/MiniMax-M3
 tools:
   read: true
   glob: true
@@ -72,7 +67,6 @@ You are ORCA's reviewer. Return a structured controller result with summary, fil
   "---
 description: ORCA tester role
 mode: primary
-model: minimax-coding-plan/MiniMax-M3
 tools:
   read: true
   glob: true

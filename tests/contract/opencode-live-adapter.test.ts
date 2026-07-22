@@ -27,12 +27,84 @@ describe("RealOpenCodeAdapter", () => {
     await expect(adapter.listSessions("C:/workspace")).resolves.toEqual([expect.objectContaining({ id: "s-1", projectRoot: "C:/workspace", lastActivity: "2026-07-20T09:00:00.000Z", model: { providerId: "openai", modelId: "gpt-5" } })]);
   });
 
-  it("looks up a session model and dispatches prompts asynchronously", async () => {
-    const seen: unknown[] = [];
+  it("preserves a session model reported as id", async () => {
+    const baseUrl = await fixture((_request, response) => {
+      json(response, [{ id: "s-1", directory: "C:/workspace", model: { providerID: "opencode", id: "north-mini-code-free" } }]);
+    });
+    const adapter = new RealOpenCodeAdapter({ ...credentials, baseUrl });
+
+    await expect(adapter.listSessions("C:/workspace")).resolves.toEqual([
+      expect.objectContaining({ model: { providerId: "opencode", modelId: "north-mini-code-free" } })
+    ]);
+  });
+
+  it("reads a session model", async () => {
     const baseUrl = await fixture(async (request, response) => {
-      if (request.url === "/session/s-1" && request.method === "GET") return json(response, { id: "s-1", model: { providerID: "openai", modelID: "gpt-5" } });
+      if (request.url === "/session/s-1" && request.method === "GET") return json(response, { id: "s-1", model: { providerID: "opencode", id: "north-mini-code-free" } });
+      response.statusCode = 404;
+      response.end();
+    });
+    const adapter = new RealOpenCodeAdapter({ ...credentials, baseUrl });
+
+    await expect(adapter.getSessionModel("s-1")).resolves.toEqual({ providerId: "opencode", modelId: "north-mini-code-free" });
+  });
+
+  it("gets session messages and normalizes text and tool parts", async () => {
+    const message = {
+      info: {
+        id: "m-1",
+        sessionID: "s-1",
+        role: "assistant",
+        parentID: "m-0",
+        time: { created: 1_753_000_000_000, completed: 1_753_000_001_000 }
+      },
+      parts: [
+        { id: "p-text", type: "text", text: "done" },
+        { id: "p-pending", type: "tool", state: { status: "pending" } },
+        { id: "p-running", type: "tool", state: { status: "running" } },
+        { id: "p-completed", type: "tool", state: { status: "completed" } },
+        { id: "p-error", type: "tool", state: { status: "error" } },
+        { id: "p-step", type: "step-finish" }
+      ]
+    };
+    const baseUrl = await fixture((request, response) => {
+      if (request.url === "/session/s-1/message?limit=2") return json(response, [message]);
+      if (request.url === "/session/s-1/message/m-1") return json(response, message);
+      response.statusCode = 404;
+      response.end();
+    });
+    const adapter = new RealOpenCodeAdapter({ ...credentials, baseUrl });
+
+    await expect(adapter.listMessages("s-1", 2)).resolves.toEqual([normalizedMessage]);
+    await expect(adapter.getMessage("s-1", "m-1")).resolves.toEqual(normalizedMessage);
+  });
+
+  it("rejects a listed message that belongs to another session", async () => {
+    const baseUrl = await fixture((_request, response) => json(response, [messageFor("s-other")]));
+    const adapter = new RealOpenCodeAdapter({ ...credentials, baseUrl });
+
+    await expect(adapter.listMessages("s-1")).rejects.toMatchObject({ name: "OpenCodeEventError", message: expect.stringContaining("sessionID does not match") });
+  });
+
+  it("rejects a fetched message that belongs to another session", async () => {
+    const baseUrl = await fixture((_request, response) => json(response, messageFor("s-other")));
+    const adapter = new RealOpenCodeAdapter({ ...credentials, baseUrl });
+
+    await expect(adapter.getMessage("s-1", "m-1")).rejects.toMatchObject({ name: "OpenCodeEventError", message: expect.stringContaining("sessionID does not match") });
+  });
+
+  it("rejects a fetched message whose identity differs from the requested message", async () => {
+    const baseUrl = await fixture((_request, response) => json(response, messageFor("s-1", "m-other")));
+    const adapter = new RealOpenCodeAdapter({ ...credentials, baseUrl });
+
+    await expect(adapter.getMessage("s-1", "m-1")).rejects.toMatchObject({ name: "OpenCodeEventError", message: expect.stringContaining("message ID does not match") });
+  });
+
+  it("posts a correlated prompt with the paired model and does not update session configuration", async () => {
+    const requests: Array<{ url: string | undefined; method: string | undefined; body?: unknown }> = [];
+    const baseUrl = await fixture(async (request, response) => {
+      requests.push({ url: request.url, method: request.method, body: request.method === "POST" ? await body(request) : undefined });
       if (request.url === "/session/s-1/prompt_async" && request.method === "POST") {
-        seen.push(await body(request));
         response.statusCode = 204;
         response.end();
         return;
@@ -42,22 +114,76 @@ describe("RealOpenCodeAdapter", () => {
     });
     const adapter = new RealOpenCodeAdapter({ ...credentials, baseUrl });
 
-    await expect(adapter.getSessionModel("s-1")).resolves.toEqual({ providerId: "openai", modelId: "gpt-5" });
-    await expect(adapter.sendPrompt({ sessionId: "s-1", content: "implement the plan" })).resolves.toBeUndefined();
-    expect(seen).toEqual([{ parts: [{ type: "text", text: "implement the plan" }] }]);
+    await expect(adapter.sendPrompt({
+      messageId: "m-correlation",
+      sessionId: "s-1",
+      content: "implement the plan",
+      agent: "build",
+      model: { providerId: "opencode", modelId: "north-mini-code-free" }
+    })).resolves.toBeUndefined();
+
+    expect(requests).toEqual([{
+      url: "/session/s-1/prompt_async",
+      method: "POST",
+      body: {
+        messageID: "m-correlation",
+        agent: "build",
+        model: { providerID: "opencode", modelID: "north-mini-code-free" },
+        parts: [{ type: "text", text: "implement the plan" }]
+      }
+    }]);
   });
 
-  it("parses SSE event payloads", async () => {
+  it("unwraps documented global event envelopes and correlates event identities", async () => {
     const baseUrl = await fixture((_request, response) => {
       response.writeHead(200, { "content-type": "text/event-stream" });
-      response.end("event: message.updated\ndata: {\"sessionID\":\"s-1\",\"value\":{\"ok\":true}}\n\n");
+      response.end([
+        sse({ directory: "C:/workspace", payload: { type: "message.updated", properties: { info: { id: "m-1", sessionID: "s-1" } } } }),
+        sse({ directory: "C:/workspace", payload: { type: "message.part.updated", properties: { part: { id: "p-1", sessionID: "s-1", messageID: "m-1" } } } }),
+        sse({ directory: "C:/workspace", payload: { type: "session.status", properties: { sessionID: "s-1", status: { type: "busy" } } } }),
+        sse({ directory: "C:/workspace", payload: { type: "session.idle", properties: { sessionID: "s-1" } } }),
+        sse({ directory: "C:/workspace", payload: { type: "permission.updated", properties: { id: "permission-1", sessionID: "s-1", messageID: "m-1" } } }),
+        sse({ directory: "C:/workspace", payload: { type: "session.error", properties: { sessionID: "s-1", error: { message: "provider failed" } } } }),
+        sse({ directory: "C:/workspace", payload: { type: "session.deleted", properties: { info: { id: "s-1" } } } })
+      ].join(""));
     });
     const adapter = new RealOpenCodeAdapter({ ...credentials, baseUrl });
     const controller = new AbortController();
 
-    const events = adapter.subscribeEvents(controller.signal);
-    await expect(events[Symbol.asyncIterator]().next()).resolves.toEqual({ done: false, value: { sessionId: "s-1", type: "message.updated", payload: { ok: true } } });
-    controller.abort();
+    const events: unknown[] = [];
+    for await (const event of adapter.subscribeEvents(controller.signal)) events.push(event);
+
+    expect(events).toEqual([
+      { directory: "C:/workspace", type: "message.updated", sessionId: "s-1", messageId: "m-1", payload: { info: { id: "m-1", sessionID: "s-1" } } },
+      { directory: "C:/workspace", type: "message.part.updated", sessionId: "s-1", messageId: "m-1", payload: { part: { id: "p-1", sessionID: "s-1", messageID: "m-1" } } },
+      { directory: "C:/workspace", type: "session.status", sessionId: "s-1", payload: { sessionID: "s-1", status: { type: "busy" } } },
+      { directory: "C:/workspace", type: "session.idle", sessionId: "s-1", payload: { sessionID: "s-1" } },
+      { directory: "C:/workspace", type: "permission.updated", sessionId: "s-1", messageId: "m-1", payload: { id: "permission-1", sessionID: "s-1", messageID: "m-1" } },
+      { directory: "C:/workspace", type: "session.error", sessionId: "s-1", payload: { sessionID: "s-1", error: { message: "provider failed" } } },
+      { directory: "C:/workspace", type: "session.deleted", sessionId: "s-1", payload: { info: { id: "s-1" } } }
+    ]);
+  });
+
+  it("rejects malformed global event data with a controlled adapter error", async () => {
+    const baseUrl = await fixture((_request, response) => {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end("data: {not-json}\n\n");
+    });
+    const adapter = new RealOpenCodeAdapter({ ...credentials, baseUrl });
+    const controller = new AbortController();
+
+    await expect(adapter.subscribeEvents(controller.signal)[Symbol.asyncIterator]().next()).rejects.toMatchObject({ name: "OpenCodeEventError", message: expect.stringContaining("Malformed") });
+  });
+
+  it("rejects a session.error event without a session correlation", async () => {
+    const baseUrl = await fixture((_request, response) => {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end(sse({ directory: "C:/workspace", payload: { type: "session.error", properties: { error: { message: "provider failed" } } } }));
+    });
+    const adapter = new RealOpenCodeAdapter({ ...credentials, baseUrl });
+    const controller = new AbortController();
+
+    await expect(adapter.subscribeEvents(controller.signal)[Symbol.asyncIterator]().next()).rejects.toMatchObject({ name: "OpenCodeEventError", message: expect.stringContaining("session.error sessionID") });
   });
 
   it("turns HTTP failures into useful errors", async () => {
@@ -85,7 +211,45 @@ describe("RealOpenCodeAdapter", () => {
     await expect(adapter.subscribeEvents(controller.signal)[Symbol.asyncIterator]().next()).rejects.toThrow(/timed out/i);
     controller.abort();
   });
+
+  it("preserves authenticated HTTP errors when getting messages", async () => {
+    const baseUrl = await fixture((_request, response) => {
+      response.statusCode = 401;
+      response.end("unauthorized");
+    });
+    const adapter = new RealOpenCodeAdapter({ ...credentials, baseUrl });
+
+    await expect(adapter.listMessages("s-1")).rejects.toMatchObject({ name: "OpenCodeHttpError", status: 401, message: expect.stringContaining("authentication failed") });
+  });
 });
+
+const normalizedMessage = {
+  id: "m-1",
+  sessionId: "s-1",
+  role: "assistant",
+  parentId: "m-0",
+  createdAt: "2025-07-20T08:26:40.000Z",
+  completedAt: "2025-07-20T08:26:41.000Z",
+  parts: [
+    { id: "p-text", type: "text", text: "done" },
+    { id: "p-pending", type: "tool", toolStatus: "pending" },
+    { id: "p-running", type: "tool", toolStatus: "running" },
+    { id: "p-completed", type: "tool", toolStatus: "completed" },
+    { id: "p-error", type: "tool", toolStatus: "error" },
+    { id: "p-step", type: "step-finish" }
+  ]
+};
+
+function sse(value: unknown): string {
+  return `event: global\ndata: ${JSON.stringify(value)}\n\n`;
+}
+
+function messageFor(sessionID: string, id = "m-1") {
+  return {
+    info: { id, sessionID, role: "assistant", time: { created: "2026-07-21T12:00:00.000Z" } },
+    parts: []
+  };
+}
 
 async function fixture(handler: (request: IncomingMessage, response: ServerResponse) => void | Promise<void>): Promise<string> {
   const server = createServer((request, response) => void handler(request, response));

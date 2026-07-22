@@ -21,6 +21,38 @@ describe("FakeOpenCodeAdapter", () => {
     ).rejects.toThrow("unknown OpenCode session");
   });
 
+  it("supports normalized messages, correlated prompts, and normalized events", async () => {
+    const adapter = new FakeOpenCodeAdapter([session("s-2", 2)], [{
+      id: "m-1",
+      sessionId: "s-2",
+      role: "assistant",
+      createdAt: "2026-07-21T12:00:00.000Z",
+      parts: [{ id: "p-1", type: "text", text: "ready" }]
+    }]);
+    const listener = vi.fn();
+    adapter.subscribe(listener);
+
+    await expect(adapter.listMessages("s-2")).resolves.toEqual([expect.objectContaining({ id: "m-1" })]);
+    await expect(adapter.getMessage("s-2", "m-1")).resolves.toEqual(expect.objectContaining({ id: "m-1" }));
+    await adapter.sendPrompt({
+      messageId: "m-correlation",
+      sessionId: "s-2",
+      content: "implement",
+      agent: "build",
+      model: { providerId: "openai", modelId: "gpt-5" }
+    });
+    adapter.emit({ directory: "C:/workspace", sessionId: "s-2", messageId: "m-1", type: "message.updated", payload: { info: { id: "m-1" } } });
+
+    expect(adapter.prompts()).toEqual([{
+      messageId: "m-correlation",
+      sessionId: "s-2",
+      content: "implement",
+      agent: "build",
+      model: { providerId: "openai", modelId: "gpt-5" }
+    }]);
+    expect(listener).toHaveBeenCalledWith({ directory: "C:/workspace", sessionId: "s-2", messageId: "m-1", type: "message.updated", payload: { info: { id: "m-1" } } });
+  });
+
   it("does not notify an unsubscribed listener", () => {
     const adapter = new FakeOpenCodeAdapter([session("s-2", 2)]);
     const listener = vi.fn();

@@ -1,8 +1,9 @@
-import type { OpenCodeAdapter } from "./adapter.js";
+import type { OpenCodeLiveAdapter } from "./adapter.js";
 import type { ModelRef } from "../../domain/types.js";
 import type {
   DeliveredTask,
   OpenCodeEvent,
+  OpenCodeMessage,
   OpenCodeSession,
   SessionPrompt,
   SessionStatus
@@ -12,15 +13,22 @@ export interface Delivery extends DeliveredTask {
   sessionId: string;
 }
 
-export class FakeOpenCodeAdapter implements OpenCodeAdapter {
+export class FakeOpenCodeAdapter implements OpenCodeLiveAdapter {
   private readonly sessions = new Map<string, OpenCodeSession>();
+  private readonly messages = new Map<string, OpenCodeMessage>();
   private readonly deliveryLog: Delivery[] = [];
+  private readonly promptLog: SessionPrompt[] = [];
   private readonly listeners = new Set<(event: OpenCodeEvent) => void>();
+  private eventsAvailable = true;
+  private sessionStatusFailures = 0;
+  private streamGeneration = 0;
+  private afterSessionList: (() => void) | undefined;
 
-  constructor(sessions: readonly OpenCodeSession[]) {
+  constructor(sessions: readonly OpenCodeSession[], messages: readonly OpenCodeMessage[] = []) {
     for (const session of sessions) {
       this.sessions.set(session.id, copySession(session));
     }
+    for (const message of messages) this.messages.set(message.id, copyMessage(message));
   }
 
   async health(): Promise<{ healthy: boolean }> {
@@ -29,15 +37,40 @@ export class FakeOpenCodeAdapter implements OpenCodeAdapter {
 
   async listSessions(projectRoot?: string): Promise<OpenCodeSession[]> {
     void projectRoot;
-    return [...this.sessions.values()].map(copySession);
+    const sessions = [...this.sessions.values()].map(copySession);
+    const after = this.afterSessionList;
+    this.afterSessionList = undefined;
+    after?.();
+    return sessions;
   }
 
   async getSessionModel(sessionId: string): Promise<ModelRef> {
     return { ...this.requireSession(sessionId).model };
   }
 
+  async listMessages(sessionId: string, limit?: number): Promise<OpenCodeMessage[]> {
+    this.requireSession(sessionId);
+    const messages = [...this.messages.values()].filter((message) => message.sessionId === sessionId);
+    return (limit === undefined ? messages : messages.slice(0, limit)).map(copyMessage);
+  }
+
+  async getMessage(sessionId: string, messageId: string): Promise<OpenCodeMessage> {
+    this.requireSession(sessionId);
+    const message = this.messages.get(messageId);
+    if (!message || message.sessionId !== sessionId) throw new Error(`unknown OpenCode message: ${messageId}`);
+    return copyMessage(message);
+  }
+
   async sendPrompt(input: SessionPrompt): Promise<void> {
-    await this.deliverTask(input.sessionId, { taskId: "prompt", content: input.content });
+    this.requireSession(input.sessionId);
+    this.promptLog.push({ ...input, model: { ...input.model } });
+    this.messages.set(input.messageId, {
+      id: input.messageId,
+      sessionId: input.sessionId,
+      role: "user",
+      createdAt: new Date().toISOString(),
+      parts: [{ id: `${input.messageId}:text`, type: "text", text: input.content }]
+    });
   }
 
   async deliverTask(sessionId: string, task: DeliveredTask): Promise<void> {
@@ -46,6 +79,10 @@ export class FakeOpenCodeAdapter implements OpenCodeAdapter {
   }
 
   async getSessionStatus(sessionId: string): Promise<SessionStatus> {
+    if (this.sessionStatusFailures > 0) {
+      this.sessionStatusFailures -= 1;
+      throw new Error("fake session status unavailable");
+    }
     const session = this.requireSession(sessionId);
 
     return {
@@ -61,10 +98,13 @@ export class FakeOpenCodeAdapter implements OpenCodeAdapter {
   }
 
   async *subscribeEvents(signal: AbortSignal): AsyncIterable<OpenCodeEvent> {
+    if (!this.eventsAvailable) throw new Error("fake SSE stream unavailable");
+    const generation = this.streamGeneration;
     const events: OpenCodeEvent[] = [];
     const stop = this.subscribe((event) => events.push(event));
     try {
       while (!signal.aborted) {
+        if (generation !== this.streamGeneration) return;
         const event = events.shift();
         if (event) {
           yield event;
@@ -87,6 +127,28 @@ export class FakeOpenCodeAdapter implements OpenCodeAdapter {
     return this.deliveryLog.map((delivery) => ({ ...delivery }));
   }
 
+  addMessage(message: OpenCodeMessage): void {
+    this.requireSession(message.sessionId);
+    this.messages.set(message.id, copyMessage(message));
+  }
+
+  replaceSession(session: OpenCodeSession): void {
+    this.requireSession(session.id);
+    this.sessions.set(session.id, copySession(session));
+  }
+
+  afterNextSessionList(callback: () => void): void { this.afterSessionList = callback; }
+
+  interruptEventStream(): void { this.streamGeneration += 1; }
+
+  setEventStreamAvailable(available: boolean): void { this.eventsAvailable = available; }
+
+  failSessionStatus(count = 1): void { this.sessionStatusFailures = count; }
+
+  prompts(): readonly SessionPrompt[] {
+    return this.promptLog.map((prompt) => ({ ...prompt, model: { ...prompt.model } }));
+  }
+
   private requireSession(sessionId: string): OpenCodeSession {
     const session = this.sessions.get(sessionId);
     if (!session) {
@@ -102,4 +164,8 @@ function copySession(session: OpenCodeSession): OpenCodeSession {
     ...session,
     model: { ...session.model }
   };
+}
+
+function copyMessage(message: OpenCodeMessage): OpenCodeMessage {
+  return { ...message, parts: message.parts.map((part) => ({ ...part })) };
 }

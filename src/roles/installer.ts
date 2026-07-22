@@ -24,5 +24,5 @@ export function installRoleProfiles(projectRoot: string): InstalledRoleProfile[]
 }
 
 export function renderRoleProfile(profile: RoleProfile): string {
-  return `---\ndescription: ORCA ${profile.role} role\nmode: ${profile.mode}\nmodel: ${profile.model}\ntools:\n${profile.tools.map((tool) => `  ${tool}: true`).join("\n")}\n---\n\n${profile.instructions}\n`;
+  return `---\ndescription: ORCA ${profile.role} role\nmode: ${profile.mode}\ntools:\n${profile.tools.map((tool) => `  ${tool}: true`).join("\n")}\n---\n\n${profile.instructions}\n`;
 }

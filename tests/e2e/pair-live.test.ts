@@ -17,14 +17,19 @@ afterEach(() => {
 });
 
 describe("interactive live-session pairing", () => {
-  it("installs role profiles pinned to minimax-coding-plan/MiniMax-M3 with the exact per-role tool grants", () => {
+  it("installs model-free role profiles with the exact per-role tool grants", () => {
     const workspace = workspacePath();
     const written = installRoleProfiles(workspace);
 
     expect(written.map((file) => file.content)).toMatchSnapshot();
-    for (const file of written) expect(file.content).toMatch(/^model: minimax-coding-plan\/MiniMax-M3$/m);
-    expect(roleProfiles.find((profile) => profile.role === "builder")?.tools).toContain("edit");
-    expect(roleProfiles.filter((profile) => profile.role !== "builder").flatMap((profile) => profile.tools)).not.toEqual(expect.arrayContaining(["edit", "bash"]));
+    for (const file of written) expect(file.content).not.toMatch(/^model:/m);
+    expect(roleProfiles.find((profile) => profile.role === "orchestrator")?.tools).not.toContain("task");
+    expect(roleProfiles.find((profile) => profile.role === "builder")?.tools).toEqual(expect.arrayContaining(["edit", "bash"]));
+    for (const role of ["orchestrator", "planner", "reviewer", "tester"] as const) {
+      const tools = roleProfiles.find((profile) => profile.role === role)?.tools;
+      expect(tools).not.toContain("edit");
+      expect(tools).not.toContain("bash");
+    }
     expect(written.every((file) => file.content.includes("structured controller result"))).toBe(true);
   });
 
@@ -42,13 +47,13 @@ describe("interactive live-session pairing", () => {
 
     const roster = await service.pairSelected(selected);
 
-    expect(lines.some((line) => line.includes("1.") && line.includes("gpt-5"))).toBe(true);
+    expect(lines.some((line) => line.includes("4.") && line.includes("gpt-5"))).toBe(true);
     expect(roster.bindings.map((binding) => [binding.position, binding.role, binding.sessionId, binding.model])).toEqual([
       [1, "orchestrator", "session-1", { providerId: "openai", modelId: "gpt-5" }],
-      [2, "planner", "session-2", { providerId: "openai", modelId: "gpt-5" }],
-      [3, "builder", "session-3", { providerId: "openai", modelId: "gpt-5" }],
-      [4, "reviewer", "session-4", { providerId: "openai", modelId: "gpt-5" }],
-      [5, "tester", "session-5", { providerId: "openai", modelId: "gpt-5" }]
+      [2, "planner", "session-2", { providerId: "anthropic", modelId: "claude-4" }],
+      [3, "builder", "session-3", { providerId: "opencode", modelId: "north-mini-code-free" }],
+      [4, "reviewer", "session-4", { providerId: "minimax-coding-plan", modelId: "MiniMax-M3" }],
+      [5, "tester", "session-5", { providerId: "local", modelId: "qwen3" }]
     ]);
     expect(persistence.getCurrentRoster()).toEqual(roster);
     expect(adapter.deliveries()).toEqual([]);
@@ -91,5 +96,12 @@ function workspacePath(): string {
 }
 
 function session(id: string, number: number, projectRoot: string): OpenCodeSession {
-  return { id, position: number, serverBaseUrl: "http://127.0.0.1:4096", projectRoot, model: { providerId: "openai", modelId: "gpt-5" }, title: `Session ${number}`, status: "idle", inFlightToolCalls: 0 };
+  const model = [
+    { providerId: "openai", modelId: "gpt-5" },
+    { providerId: "anthropic", modelId: "claude-4" },
+    { providerId: "opencode", modelId: "north-mini-code-free" },
+    { providerId: "minimax-coding-plan", modelId: "MiniMax-M3" },
+    { providerId: "local", modelId: "qwen3" }
+  ][number - 1] ?? { providerId: "openai", modelId: "gpt-5" };
+  return { id, position: number, serverBaseUrl: "http://127.0.0.1:4096", projectRoot, model, title: `Session ${number}`, status: "idle", inFlightToolCalls: 0 };
 }

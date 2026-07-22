@@ -1,7 +1,6 @@
 ---
 description: ORCA planner role
 mode: primary
-model: minimax-coding-plan/MiniMax-M3
 tools:
   read: true
   glob: true
