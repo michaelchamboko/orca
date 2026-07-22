@@ -23,7 +23,10 @@ export interface WorkflowPersistence extends RosterPersistence {
   claimNextDispatch(leaseOwner: string, leaseDurationMs: number, timestamp?: string): DispatchOutboxAction | null;
   acknowledgeDispatch(id: number, leaseOwner: string, timestamp?: string): void;
   releaseDispatch(id: number, leaseOwner: string, lastError?: string | null, timestamp?: string): void;
+  getDispatchByPromptMessageId(promptMessageId: string): DispatchOutboxAction | null;
   enqueueDispatch(input: import("../persistence/sqlite.js").DispatchInput): DispatchOutboxAction;
+  recordOrchestratorDecisionResponse(input: { missionId: string; decisionPromptMessageId: string; responseMessageId: string; responseHash: string; outcome: "accepted" | "rejected"; reasonCode: string | null; taskId: string | null; action: string | null }): { id: number };
+  getOrchestratorDecisionResponses(missionId: string): Array<{ decisionPromptMessageId: string; responseMessageId: string; outcome: "accepted" | "rejected"; reasonCode: string | null }>;
   getPendingDispatches(limit?: number): DispatchOutboxAction[];
   getTaskExecutionByPromptMessageId(promptMessageId: string): TaskExecutionRecord | null;
   getTaskExecutionsForCompletion(): TaskExecutionRecord[];

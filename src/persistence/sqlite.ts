@@ -80,13 +80,28 @@ export interface OutboxEvent {
   publishedAt: string | null;
 }
 
+export type DispatchPurpose = "worker_task" | "contract_repair" | "orchestrator_decision" | "final_completion" | "status_notice";
+
+export type DispatchContract =
+  | "worker_result"
+  | "orchestrator_action";
+
+export interface DispatchPromptPayload {
+  kind: DispatchPurpose | string;
+  [key: string]: JsonLike;
+}
+
 export interface DispatchInput {
   missionId: string;
   dispatchKey: string;
-  targetRole: WorkerRole;
+  targetRole: Role;
   targetSessionId: string;
   capturedModel: ModelRef;
   promptMessageId: string;
+  taskId?: string | null;
+  purpose?: DispatchPurpose;
+  parentPromptMessageId?: string | null;
+  promptPayload?: Record<string, JsonLike>;
 }
 
 export interface DispatchOutboxAction extends DispatchInput {
@@ -99,12 +114,11 @@ export interface DispatchOutboxAction extends DispatchInput {
   updatedAt: string;
   acknowledgedAt: string | null;
   lastError: string | null;
-  taskId?: string | null;
-  purpose?: string | null;
-  parentPromptMessageId?: string | null;
+  taskId: string | null;
+  purpose: DispatchPurpose;
+  parentPromptMessageId: string | null;
+  promptPayload: Record<string, JsonLike>;
 }
-
-export type DispatchPurpose = "worker_task" | "contract_repair" | "orchestrator_decision" | "final_completion" | "status_notice";
 
 export interface TaskPromptAttemptRecord {
   taskId: string;
@@ -645,15 +659,21 @@ export class SqlitePersistence {
 
   public enqueueDispatch(input: DispatchInput): DispatchOutboxAction {
     const timestamp = nowIso();
+    const purpose = input.purpose ?? "worker_task";
+    const taskId = input.taskId ?? null;
+    const parentPromptMessageId = input.parentPromptMessageId ?? null;
+    const promptPayload = toJsonString(input.promptPayload ?? {});
     this.database.prepare(`
       INSERT INTO dispatch_outbox (
         mission_id, dispatch_key, target_role, target_session_id, model_provider_id, model_id, prompt_message_id,
-        state, lease_owner, lease_expires_at, attempt, created_at, updated_at, acknowledged_at, last_error
+        state, lease_owner, lease_expires_at, attempt, created_at, updated_at, acknowledged_at, last_error,
+        task_id, purpose, parent_prompt_message_id, prompt_payload
       ) VALUES (
         @missionId, @dispatchKey, @targetRole, @targetSessionId, @modelProviderId, @modelId, @promptMessageId,
-        'pending', NULL, NULL, 0, @timestamp, @timestamp, NULL, NULL
+        'pending', NULL, NULL, 0, @timestamp, @timestamp, NULL, NULL,
+        @taskId, @purpose, @parentPromptMessageId, @promptPayload
       ) ON CONFLICT (dispatch_key) DO NOTHING
-    `).run({ ...input, modelProviderId: input.capturedModel.providerId, modelId: input.capturedModel.modelId, timestamp });
+    `).run({ ...input, modelProviderId: input.capturedModel.providerId, modelId: input.capturedModel.modelId, timestamp, taskId, purpose, parentPromptMessageId, promptPayload });
     const action = this.getDispatchByKey(input.dispatchKey);
     if (!action) throw new Error(`dispatch not found after enqueue: ${input.dispatchKey}`);
     return action;
@@ -662,6 +682,26 @@ export class SqlitePersistence {
   public getDispatchByKey(dispatchKey: string): DispatchOutboxAction | null {
     const row = this.database.prepare(`SELECT * FROM dispatch_outbox WHERE dispatch_key = @dispatchKey`).get({ dispatchKey }) as DispatchOutboxRow | undefined;
     return row ? dispatchFromRow(row) : null;
+  }
+
+  public getDispatchByPromptMessageId(promptMessageId: string): DispatchOutboxAction | null {
+    const row = this.database.prepare(`SELECT * FROM dispatch_outbox WHERE prompt_message_id = @promptMessageId`).get({ promptMessageId }) as DispatchOutboxRow | undefined;
+    return row ? dispatchFromRow(row) : null;
+  }
+
+  public recordOrchestratorDecisionResponse(input: { missionId: string; decisionPromptMessageId: string; responseMessageId: string; responseHash: string; outcome: "accepted" | "rejected"; reasonCode: string | null; taskId: string | null; action: string | null }): { id: number } {
+    const recordedAt = nowIso();
+    const result = this.database.prepare(`
+      INSERT OR IGNORE INTO orchestrator_decision_responses (
+        mission_id, decision_prompt_message_id, response_message_id, response_hash, outcome, reason_code, task_id, action, recorded_at
+      ) VALUES (@missionId, @decisionPromptMessageId, @responseMessageId, @responseHash, @outcome, @reasonCode, @taskId, @action, @recordedAt)
+    `).run({ ...input, recordedAt });
+    return { id: Number(result.lastInsertRowid ?? 0) };
+  }
+
+  public getOrchestratorDecisionResponses(missionId: string): Array<{ decisionPromptMessageId: string; responseMessageId: string; outcome: "accepted" | "rejected"; reasonCode: string | null }> {
+    const rows = this.database.prepare(`SELECT decision_prompt_message_id, response_message_id, outcome, reason_code FROM orchestrator_decision_responses WHERE mission_id = @missionId ORDER BY id ASC`).all({ missionId }) as Array<{ decision_prompt_message_id: string; response_message_id: string; outcome: "accepted" | "rejected"; reason_code: string | null }>;
+    return rows.map((row) => ({ decisionPromptMessageId: row.decision_prompt_message_id, responseMessageId: row.response_message_id, outcome: row.outcome, reasonCode: row.reason_code }));
   }
 
   public getPendingDispatches(limit = 100): DispatchOutboxAction[] {
@@ -772,7 +812,8 @@ export class SqlitePersistence {
       { version: 3, sql: completionRecoverySchemaSql },
       { version: 4, sql: rosterHistorySchemaSql },
       { version: 5, sql: completionHardeningSchemaSql },
-      { version: 6, sql: orchestratorActionsSchemaSql }
+      { version: 6, sql: orchestratorActionsSchemaSql },
+      { version: 7, sql: dispatchContractSchemaSql }
     ];
     for (const migration of migrations) {
       if (applied.has(migration.version)) continue;
@@ -788,7 +829,7 @@ interface DispatchOutboxRow {
   id: number;
   mission_id: string;
   dispatch_key: string;
-  target_role: WorkerRole;
+  target_role: Role;
   target_session_id: string;
   model_provider_id: string;
   model_id: string;
@@ -801,16 +842,40 @@ interface DispatchOutboxRow {
   updated_at: string;
   acknowledged_at: string | null;
   last_error: string | null;
+  task_id: string | null;
+  purpose: DispatchPurpose;
+  parent_prompt_message_id: string | null;
+  prompt_payload: string;
 }
 
 function dispatchFromRow(row: DispatchOutboxRow): DispatchOutboxAction {
   return {
-    id: row.id, missionId: row.mission_id, dispatchKey: row.dispatch_key, targetRole: row.target_role,
-    targetSessionId: row.target_session_id, capturedModel: { providerId: row.model_provider_id, modelId: row.model_id },
-    promptMessageId: row.prompt_message_id, state: row.state, leaseOwner: row.lease_owner,
-    leaseExpiresAt: row.lease_expires_at, attempt: row.attempt, createdAt: row.created_at,
-    updatedAt: row.updated_at, acknowledgedAt: row.acknowledged_at, lastError: row.last_error
+    id: row.id,
+    missionId: row.mission_id,
+    dispatchKey: row.dispatch_key,
+    targetRole: row.target_role,
+    targetSessionId: row.target_session_id,
+    capturedModel: { providerId: row.model_provider_id, modelId: row.model_id },
+    promptMessageId: row.prompt_message_id,
+    state: row.state,
+    leaseOwner: row.lease_owner,
+    leaseExpiresAt: row.lease_expires_at,
+    attempt: row.attempt,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    acknowledgedAt: row.acknowledged_at,
+    lastError: row.last_error,
+    taskId: row.task_id,
+    purpose: row.purpose,
+    parentPromptMessageId: row.parent_prompt_message_id,
+    promptPayload: parsePromptPayload(row.prompt_payload)
   };
+}
+
+function parsePromptPayload(value: string): Record<string, JsonLike> {
+  if (!value) return {};
+  try { return parseJson<Record<string, JsonLike>>(value); }
+  catch { return {}; }
 }
 
 const initialSchemaSql = `
@@ -1026,4 +1091,27 @@ const orchestratorActionsSchemaSql = `
   ALTER TABLE orchestrator_approvals ADD COLUMN gate TEXT;
   ALTER TABLE orchestrator_approvals ADD COLUMN workspace_fingerprint TEXT;
   ALTER TABLE orchestrator_approvals ADD COLUMN superseded_at TEXT;
+`;
+
+const dispatchContractSchemaSql = `
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_dispatch_outbox_prompt_message_id
+    ON dispatch_outbox (prompt_message_id);
+  UPDATE dispatch_outbox SET task_id = (
+    SELECT tem.task_id FROM task_execution_metadata tem WHERE tem.controller_prompt_message_id = dispatch_outbox.prompt_message_id
+  ) WHERE task_id IS NULL;
+  CREATE TABLE IF NOT EXISTS orchestrator_decision_responses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    mission_id TEXT NOT NULL,
+    decision_prompt_message_id TEXT NOT NULL,
+    response_message_id TEXT NOT NULL,
+    response_hash TEXT NOT NULL,
+    outcome TEXT NOT NULL CHECK (outcome IN ('accepted', 'rejected')),
+    reason_code TEXT,
+    task_id TEXT,
+    action TEXT,
+    recorded_at TEXT NOT NULL,
+    UNIQUE (mission_id, decision_prompt_message_id, response_message_id),
+    FOREIGN KEY (mission_id) REFERENCES missions (mission_id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_orchestrator_decision_responses_mission ON orchestrator_decision_responses (mission_id);
 `;

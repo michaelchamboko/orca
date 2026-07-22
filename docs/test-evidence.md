@@ -99,3 +99,12 @@ This document records empirical test evidence captured during execution of the O
 |---|---|---|---|---|
 | TASK-009 | TBD | `pnpm.cmd run test:e2e:real` (env `ORCA_REAL_E2E=1`) | TBD | |
 | TASK-009 | TBD | `pnpm.cmd run verify` | TBD | |
+## FIX-001 — Complete the generalized dispatch contract
+
+| Task | Commit | Command | Exit | Notes / Review |
+|---|---|---|---|---|
+| FIX-001 | (this commit) | pnpm.cmd exec vitest run tests/integration/dispatch-outbox.test.ts | 0 | 4 tests pass: every-purpose round-trip, unique prompt_message_id, heterogeneous models, decision-response ledger |
+| FIX-001 | (this commit) | pnpm.cmd run test:unit | 0 | 92 unit tests pass (no regression) |
+| FIX-001 | (this commit) | pnpm.cmd run test:integration | 0 | 21 integration tests pass (was 17; +4 dispatch contract) |
+| FIX-001 | (this commit) | pnpm.cmd run typecheck | 0 | Clean |
+| FIX-001 | (this commit) | pnpm.cmd run lint | 0 | Clean |

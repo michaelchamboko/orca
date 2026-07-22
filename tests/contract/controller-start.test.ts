@@ -158,6 +158,9 @@ class MemoryPersistence implements WorkflowPersistence {
   saveTaskExecutionOutput(): void {}
   saveMission(): void {}
   enqueueDispatch(): never { throw new Error("not used in startup fixture"); }
+  getDispatchByPromptMessageId() { return null; }
+  recordOrchestratorDecisionResponse() { return { id: 1 }; }
+  getOrchestratorDecisionResponses() { return []; }
   saveTaskResult(): void {}
   blockTaskExecution(): void {}
   recordControllerEvent(): void {}
