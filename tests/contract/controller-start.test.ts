@@ -153,6 +153,11 @@ class MemoryPersistence implements WorkflowPersistence {
   releaseDispatch(): void {}
   getPendingDispatches() { return []; }
   getTaskExecutionByPromptMessageId() { return null; }
+  getTaskExecutionsForCompletion() { return []; }
+  saveTaskExecutionOutput(): void {}
+  saveTaskResult(): void {}
+  blockTaskExecution(): void {}
+  recordControllerEvent(): void {}
   saveWorkspaceSnapshot(): never { throw new Error("workflow persistence is not exercised by this startup fixture"); }
   setTaskExecutionState(): void {}
   setMissionFailure(): void {}
