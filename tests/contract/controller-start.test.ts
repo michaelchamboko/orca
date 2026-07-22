@@ -170,6 +170,14 @@ class MemoryPersistence implements WorkflowPersistence {
   completeTaskExecutionAtomically(): void {}
   runInTransaction<T>(operation: () => T): T { return operation(); }
   hasActiveMission(): boolean { return false; }
+  recordOrchestratorActionMessage() { return { id: 1, createdAt: new Date().toISOString() }; }
+  markOrchestratorActionMessageAccepted(): void {}
+  markOrchestratorActionMessageRejected(): void {}
+  getOrchestratorActionMessage() { return null; }
+  recordMissionEvent(): void {}
+  getMissionEvents() { return []; }
+  consumeTask(): void {}
+  supersedeApprovalsBefore() { return 0; }
 }
 
 class MutableAdapter implements OpenCodeLiveAdapter {

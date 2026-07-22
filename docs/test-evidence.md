@@ -38,9 +38,11 @@ This document records empirical test evidence captured during execution of the O
 
 | Task | Commit | Command | Exit | Notes / Review |
 |---|---|---|---|---|
-| TASK-003 | TBD | `pnpm.cmd exec vitest run tests/unit/orchestrator-actions.test.ts tests/integration/orchestrator-actions.test.ts` | TBD | |
-| TASK-003 | TBD | `pnpm.cmd run typecheck` | TBD | |
-| TASK-003 | TBD | `pnpm.cmd run lint` | TBD | |
+| TASK-003 | (this commit) | `pnpm.cmd exec vitest run tests/unit/orchestrator-actions.test.ts` | 0 | 11 tests pass (schema validation covers approve/reject/request_completion, unknown fields, task required/forbidden rules) |
+| TASK-003 | (this commit) | `pnpm.cmd run test:unit` | 0 | 92 tests pass (was 81; +11 net for action schema) |
+| TASK-003 | (this commit) | `pnpm.cmd run test:integration` | 0 | 9 tests pass (planner dispatch unaffected) |
+| TASK-003 | (this commit) | `pnpm.cmd run typecheck` | 0 | Clean |
+| TASK-003 | (this commit) | `pnpm.cmd run lint` | 0 | Clean |
 
 ## TASK-004 — Mission transitions
 

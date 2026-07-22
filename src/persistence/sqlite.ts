@@ -464,6 +464,61 @@ export class SqlitePersistence {
     });
   }
 
+  public recordOrchestratorActionMessage(input: { missionId: string; messageId: string; sessionId: string; parentMessageId: string | null; decisionPromptMessageId: string | null; rawPayload: string; parsedPayload: Record<string, JsonLike>; action: string; taskId: string | null }): { id: number; createdAt: string } {
+    const createdAt = nowIso();
+    const result = this.database.prepare(`
+      INSERT OR IGNORE INTO orchestrator_action_messages (mission_id, message_id, session_id, parent_message_id, decision_prompt_message_id, action, task_id, payload, parsed_payload, created_at)
+      VALUES (@missionId, @messageId, @sessionId, @parentMessageId, @decisionPromptMessageId, @action, @taskId, @payload, @parsedPayload, @createdAt)
+    `).run({ ...input, payload: input.rawPayload, parsedPayload: toJsonString(input.parsedPayload), createdAt });
+    return { id: Number(result.lastInsertRowid ?? 0), createdAt };
+  }
+
+  public markOrchestratorActionMessageAccepted(messageId: string): void {
+    const result = this.database.prepare(`UPDATE orchestrator_action_messages SET accepted = 1 WHERE message_id = @messageId`).run({ messageId });
+    if (result.changes === 0) throw new Error(`orchestrator action message not found: ${messageId}`);
+  }
+
+  public markOrchestratorActionMessageRejected(messageId: string, reason: string): void {
+    const result = this.database.prepare(`UPDATE orchestrator_action_messages SET accepted = 0, reject_reason = @reason WHERE message_id = @messageId`).run({ messageId, reason });
+    if (result.changes === 0) throw new Error(`orchestrator action message not found: ${messageId}`);
+  }
+
+  public getOrchestratorActionMessage(messageId: string): { missionId: string; sessionId: string; parentMessageId: string | null; decisionPromptMessageId: string | null; action: string; taskId: string | null; parsedPayload: Record<string, JsonLike>; accepted: boolean; rejectReason: string | null; createdAt: string } | null {
+    const row = this.database.prepare(`SELECT mission_id, session_id, parent_message_id, decision_prompt_message_id, action, task_id, parsed_payload, accepted, reject_reason, created_at FROM orchestrator_action_messages WHERE message_id = @messageId`).get({ messageId }) as { mission_id: string; session_id: string; parent_message_id: string | null; decision_prompt_message_id: string | null; action: string; task_id: string | null; parsed_payload: string; accepted: number; reject_reason: string | null; created_at: string } | undefined;
+    if (!row) return null;
+    return {
+      missionId: row.mission_id,
+      sessionId: row.session_id,
+      parentMessageId: row.parent_message_id,
+      decisionPromptMessageId: row.decision_prompt_message_id,
+      action: row.action,
+      taskId: row.task_id,
+      parsedPayload: parseJson<Record<string, JsonLike>>(row.parsed_payload),
+      accepted: row.accepted === 1,
+      rejectReason: row.reject_reason,
+      createdAt: row.created_at
+    };
+  }
+
+  public recordMissionEvent(missionId: string, taskId: string | null, eventType: string, payload: Record<string, JsonLike>): void {
+    this.database.prepare(`INSERT INTO mission_event_ledger (mission_id, task_id, event_type, payload, created_at) VALUES (@missionId, @taskId, @eventType, @payload, @createdAt)`).run({ missionId, taskId, eventType, payload: toJsonString(payload), createdAt: nowIso() });
+  }
+
+  public getMissionEvents(missionId: string): Array<{ taskId: string | null; eventType: string; payload: Record<string, JsonLike>; createdAt: string }> {
+    const rows = this.database.prepare(`SELECT task_id, event_type, payload, created_at FROM mission_event_ledger WHERE mission_id = @missionId ORDER BY id ASC`).all({ missionId }) as Array<{ task_id: string | null; event_type: string; payload: string; created_at: string }>;
+    return rows.map((row) => ({ taskId: row.task_id, eventType: row.event_type, payload: parseJson<Record<string, JsonLike>>(row.payload), createdAt: row.created_at }));
+  }
+
+  public consumeTask(taskId: string, timestamp: string = nowIso()): void {
+    const result = this.database.prepare(`UPDATE tasks SET consumed_at = @timestamp WHERE task_id = @taskId AND consumed_at IS NULL`).run({ taskId, timestamp });
+    if (result.changes === 0) throw new Error(`task not consumed: ${taskId}`);
+  }
+
+  public supersedeApprovalsBefore(missionId: string, gate: string, timestamp: string = nowIso()): number {
+    const result = this.database.prepare(`UPDATE orchestrator_approvals SET superseded_at = @timestamp WHERE mission_id = @missionId AND gate = @gate AND superseded_at IS NULL`).run({ missionId, gate, timestamp });
+    return result.changes;
+  }
+
   public blockTaskExecution(taskId: string, reason: string): void {
     this.runInTransaction(() => {
       const task = this.getTaskExecution(taskId);
@@ -705,7 +760,8 @@ export class SqlitePersistence {
       { version: 2, sql: liveWorkflowSchemaSql },
       { version: 3, sql: completionRecoverySchemaSql },
       { version: 4, sql: rosterHistorySchemaSql },
-      { version: 5, sql: completionHardeningSchemaSql }
+      { version: 5, sql: completionHardeningSchemaSql },
+      { version: 6, sql: orchestratorActionsSchemaSql }
     ];
     for (const migration of migrations) {
       if (applied.has(migration.version)) continue;
@@ -925,4 +981,38 @@ const completionHardeningSchemaSql = `
     FOREIGN KEY (task_id) REFERENCES tasks (task_id) ON DELETE CASCADE
   );
   CREATE INDEX IF NOT EXISTS idx_task_prompt_attempts_task ON task_prompt_attempts (task_id);
+`;
+
+const orchestratorActionsSchemaSql = `
+  CREATE TABLE IF NOT EXISTS orchestrator_action_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    mission_id TEXT NOT NULL,
+    message_id TEXT NOT NULL UNIQUE,
+    session_id TEXT NOT NULL,
+    parent_message_id TEXT,
+    decision_prompt_message_id TEXT,
+    action TEXT NOT NULL CHECK (action IN ('approve', 'reject', 'request_completion')),
+    task_id TEXT,
+    payload TEXT NOT NULL,
+    parsed_payload TEXT NOT NULL,
+    accepted INTEGER NOT NULL DEFAULT 0,
+    reject_reason TEXT,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (mission_id) REFERENCES missions (mission_id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_orchestrator_action_messages_mission ON orchestrator_action_messages (mission_id);
+  CREATE TABLE IF NOT EXISTS mission_event_ledger (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    mission_id TEXT NOT NULL,
+    task_id TEXT,
+    event_type TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (mission_id) REFERENCES missions (mission_id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_mission_event_ledger_mission ON mission_event_ledger (mission_id, id);
+  ALTER TABLE tasks ADD COLUMN consumed_at TEXT;
+  ALTER TABLE orchestrator_approvals ADD COLUMN gate TEXT;
+  ALTER TABLE orchestrator_approvals ADD COLUMN workspace_fingerprint TEXT;
+  ALTER TABLE orchestrator_approvals ADD COLUMN superseded_at TEXT;
 `;
