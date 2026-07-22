@@ -495,7 +495,7 @@ export class SqlitePersistence {
       INSERT OR IGNORE INTO orchestrator_action_messages (mission_id, message_id, session_id, parent_message_id, decision_prompt_message_id, action, task_id, payload, parsed_payload, created_at)
       VALUES (@missionId, @messageId, @sessionId, @parentMessageId, @decisionPromptMessageId, @action, @taskId, @payload, @parsedPayload, @createdAt)
     `).run({ ...input, payload: input.rawPayload, parsedPayload: toJsonString(input.parsedPayload), createdAt });
-    return { id: Number(result.lastInsertRowid ?? 0), createdAt };
+    return { id: result.changes === 1 ? Number(result.lastInsertRowid) : 0, createdAt };
   }
 
   public markOrchestratorActionMessageAccepted(messageId: string): void {

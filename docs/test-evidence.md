@@ -118,3 +118,13 @@ This document records empirical test evidence captured during execution of the O
 | FIX-002 | (this commit) | pnpm.cmd run test:integration | 0 | 21 integration tests pass (planner regression green) |
 | FIX-002 | (this commit) | pnpm.cmd run typecheck | 0 | Clean |
 | FIX-002 | (this commit) | pnpm.cmd run lint | 0 | Clean |
+
+## FIX-003 — Stable correlated Session 1 actions
+
+| Task | Commit | Command | Exit | Notes / Review |
+|---|---|---|---|---|
+| FIX-003 | (this commit) | pnpm.cmd exec vitest run tests/integration/orchestrator-actions.test.ts | 0 | 6 tests pass: rejects user messages, rejects worker sessions, parent mismatch, stable correlated accept, dedupe via recorded action, busy/tool rejection |
+| FIX-003 | (this commit) | pnpm.cmd run test:unit | 0 | 92 unit tests pass (no regression) |
+| FIX-003 | (this commit) | pnpm.cmd run test:integration | 0 | 27 integration tests pass (was 21; +6 orchestrator-actions) |
+| FIX-003 | (this commit) | pnpm.cmd run typecheck | 0 | Clean |
+| FIX-003 | (this commit) | pnpm.cmd run lint | 0 | Clean |
