@@ -60,6 +60,7 @@ export class DispatchOutbox {
           });
         }
         this.persistence.acknowledgeDispatch(action.id, owner);
+        if (action.taskId) this.persistence.setTaskExecutionState(action.taskId, "dispatched");
         recovered.push(action);
       } catch (error) {
         const reason = error instanceof Error ? error.message : "dispatch delivery failed";
@@ -94,12 +95,15 @@ function bindingFor(roster: PairedRoster, role: Role) {
 export const defaultRenderer: DispatchPromptPayloadRenderer = {
   render(purpose, payload, marker) {
     switch (purpose) {
-      case "worker_task":
-        return `${marker}\nReturn only a valid structured result for this task.\n\nTask envelope:\n${JSON.stringify(payload.envelope ?? {})}`;
+      case "worker_task": {
+        const objective = (payload.objective as string | undefined) ?? "";
+        return `${marker}\nReturn only a valid structured result for this task.\n\nSource objective:\n${objective}\n\nTask envelope:\n${JSON.stringify(payload.envelope ?? {})}`;
+      }
       case "contract_repair": {
         const envelope = payload.envelope as TaskEnvelope | undefined;
         const original = (payload.originalPromptMessageId as string | undefined) ?? "";
-        return `${marker}\nYour previous result was invalid. Reply with only valid JSON for this same task.\nOriginal prompt: ${original}\nTask envelope:\n${JSON.stringify(envelope ?? {})}`;
+        const objective = (payload.objective as string | undefined) ?? "";
+        return `${marker}\nYour previous result was invalid. Reply with only valid JSON for this same task.\nOriginal prompt: ${original}\nSource objective:\n${objective}\nTask envelope:\n${JSON.stringify(envelope ?? {})}`;
       }
       case "orchestrator_decision": {
         const taskId = (payload.taskId as string | undefined) ?? "";

@@ -11,7 +11,7 @@ import { createControllerApi } from "./api.js";
 import { EventRuntime } from "./event-runtime.js";
 import { WorkerCompletionService } from "./worker-completion.js";
 import { MissionIngress } from "./mission-ingress.js";
-import { PlannerDispatchOutbox } from "./planner-dispatch.js";
+import { DispatchOutbox } from "./dispatch-outbox.js";
 import type { WorkflowPersistence } from "./workflow-persistence.js";
 import {
   CONTROLLER_HOST,
@@ -100,13 +100,13 @@ export async function startController(options: StartControllerOptions): Promise<
 
     const roster = await new RosterService(options.adapter, options.persistence).assertCurrent();
     const rosterService = new RosterService(options.adapter, options.persistence);
-    const dispatch = new PlannerDispatchOutbox(options.adapter, options.persistence, rosterService);
-    const completion = new WorkerCompletionService(options.adapter, options.persistence, {
+    const dispatch = new DispatchOutbox(options.adapter, options.persistence, rosterService);
+    const completion = new WorkerCompletionService(options.adapter, options.persistence, dispatch, {
       assertWorkerBinding: async (task) => {
         const current = await rosterService.assertCurrent();
         const binding = current.bindings.find((candidate) => candidate.role === task.role);
         if (!binding || binding.sessionId !== task.targetSessionId) throw new Error("roster drift");
-        return { agent: `orca-${binding.role}`, model: { ...binding.model } };
+        return { agent: `orca-${binding.role}`, model: { ...binding.model }, sessionId: binding.sessionId };
       }
     });
     const events = new EventRuntime(options.adapter, new MissionIngress(options.projectRoot, options.adapter, options.persistence, rosterService, dispatch), dispatch, completion);

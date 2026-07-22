@@ -6,7 +6,7 @@ import type { PairedRoster, TaskEnvelope } from "../domain/types.js";
 import { RosterService } from "../pairing/roster-service.js";
 import type { WorkflowPersistence } from "./workflow-persistence.js";
 import { captureProvisionalDispatchBaseline } from "./workspace-baseline.js";
-import { PlannerDispatchOutbox } from "./planner-dispatch.js";
+import { DispatchOutbox } from "./dispatch-outbox.js";
 
 const TASK_TIMEOUT_MS = 10 * 60_000;
 
@@ -17,7 +17,7 @@ export class MissionIngress {
     private readonly adapter: OpenCodeLiveAdapter,
     private readonly persistence: WorkflowPersistence,
     private readonly rosterService: RosterService,
-    private readonly dispatch: PlannerDispatchOutbox
+    private readonly dispatch: DispatchOutbox
   ) {}
 
   async processStartup(cutoff: Date): Promise<void> {
@@ -86,7 +86,17 @@ export class MissionIngress {
       this.persistence.createMissionTaskAndDispatch({
         mission: { missionId, rosterId: current.rosterId, objective, sourceSessionMessageId: message.id, state: "planning" },
         task: { envelope, targetSessionId: planner.sessionId, controllerPromptMessageId: promptMessageId },
-        dispatch: { dispatchKey, targetRole: "planner", targetSessionId: planner.sessionId, capturedModel: { ...planner.model }, promptMessageId },
+        dispatch: {
+          dispatchKey,
+          targetRole: "planner",
+          targetSessionId: planner.sessionId,
+          capturedModel: { ...planner.model },
+          promptMessageId,
+          taskId,
+          purpose: "worker_task",
+          parentPromptMessageId: null,
+          promptPayload: { kind: "worker_task", objective, envelope }
+        },
         snapshot: { snapshotId: stableId("snapshot", current.rosterId, message.id), missionId, projectRoot: current.projectRoot, fingerprint: baseline.sourceWorkspaceFingerprint, payload: baseline.payload }
       });
       await this.dispatch.recoverPending();

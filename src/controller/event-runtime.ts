@@ -1,6 +1,6 @@
 import type { OpenCodeLiveAdapter } from "../integrations/opencode/adapter.js";
 import { MissionIngress } from "./mission-ingress.js";
-import { PlannerDispatchOutbox } from "./planner-dispatch.js";
+import { DispatchOutbox } from "./dispatch-outbox.js";
 import { WorkerCompletionService } from "./worker-completion.js";
 
 const reconnectDelays = [250, 500, 1_000, 2_000, 5_000] as const;
@@ -12,7 +12,7 @@ export class EventRuntime {
   private pollTimer: ReturnType<typeof globalThis.setInterval> | undefined;
   private listening = false;
 
-  constructor(private readonly adapter: OpenCodeLiveAdapter, private readonly ingress: MissionIngress, private readonly dispatch: PlannerDispatchOutbox, private readonly completion: WorkerCompletionService) {}
+  constructor(private readonly adapter: OpenCodeLiveAdapter, private readonly ingress: MissionIngress, private readonly dispatch: DispatchOutbox, private readonly completion: WorkerCompletionService) {}
 
   get eventListening(): boolean { return this.listening; }
 

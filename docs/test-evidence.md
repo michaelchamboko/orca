@@ -108,3 +108,13 @@ This document records empirical test evidence captured during execution of the O
 | FIX-001 | (this commit) | pnpm.cmd run test:integration | 0 | 21 integration tests pass (was 17; +4 dispatch contract) |
 | FIX-001 | (this commit) | pnpm.cmd run typecheck | 0 | Clean |
 | FIX-001 | (this commit) | pnpm.cmd run lint | 0 | Clean |
+
+## FIX-002 — Worker repair and timeout recovery
+
+| Task | Commit | Command | Exit | Notes / Review |
+|---|---|---|---|---|
+| FIX-002 | (this commit) | pnpm.cmd exec vitest run tests/unit/worker-completion.test.ts | 0 | 13 tests pass including restart-safe repair via durable outbox, new invalid blocks, same invalid ignored, timeout from initial acknowledgement, completion transaction rollback |
+| FIX-002 | (this commit) | pnpm.cmd run test:unit | 0 | 92 unit tests pass (no regression) |
+| FIX-002 | (this commit) | pnpm.cmd run test:integration | 0 | 21 integration tests pass (planner regression green) |
+| FIX-002 | (this commit) | pnpm.cmd run typecheck | 0 | Clean |
+| FIX-002 | (this commit) | pnpm.cmd run lint | 0 | Clean |

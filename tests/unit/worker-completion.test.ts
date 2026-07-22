@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { WorkerCompletionService } from "../../src/controller/worker-completion.js";
+import { DispatchOutbox } from "../../src/controller/dispatch-outbox.js";
 import { SqlitePersistence } from "../../src/persistence/sqlite.js";
 import { FakeOpenCodeAdapter } from "../../src/integrations/opencode/fake.js";
 import type { OpenCodeMessage, OpenCodeSession } from "../../src/integrations/opencode/types.js";
@@ -64,11 +65,13 @@ describe("worker completion", () => {
     const setup = fixture();
     setup.adapter.addMessage(resultMessage("invalid", "prompt", { nope: true }));
     await setup.service.observeAll();
+    await setup.dispatch.recoverPending();
     expect(setup.adapter.prompts()).toHaveLength(1);
     const repairPrompt = setup.adapter.prompts()[0];
     expect(repairPrompt).toMatchObject({ sessionId: "worker", agent: "orca-planner", model: { providerId: "openai", modelId: "gpt-5" } });
     expect(repairPrompt.messageId).toMatch(/^orca-repair-task-/);
-    expect(setup.persistence.getTaskPromptAttempts("task").map((attempt) => attempt.purpose)).toEqual(["contract_repair"]);
+    expect(setup.persistence.getTaskPromptAttempts("task").map((attempt) => attempt.purpose)).toEqual(["worker_task", "contract_repair"]);
+    setup.adapter.addMessage(resultMessage("invalid-repair", repairPrompt.messageId, { stillNope: true }));
     await setup.service.observeAll();
     expect(setup.persistence.getTask("task")?.state).toBe("blocked");
     expect(setup.persistence.getMission("mission")?.state).toBe("blocked");
@@ -78,11 +81,12 @@ describe("worker completion", () => {
     const setup = fixture();
     setup.adapter.addMessage(resultMessage("invalid", "prompt", { nope: true }));
     await setup.service.observeAll();
+    await setup.dispatch.recoverPending();
     expect(setup.adapter.prompts()).toHaveLength(1);
     await setup.service.observeAll();
     await setup.service.observeAll();
     expect(setup.adapter.prompts()).toHaveLength(1);
-    expect(setup.persistence.getTaskPromptAttempts("task")).toHaveLength(1);
+    expect(setup.persistence.getTaskPromptAttempts("task").filter((attempt) => attempt.purpose === "contract_repair")).toHaveLength(1);
   });
 
   it("blocks an unrelated in-flight tool in the same session without blocking the active lineage", async () => {
@@ -179,12 +183,15 @@ function fixture(options: { timeoutMs?: number } = {}) {
   let now = startedAt;
   persistence.saveMission("mission", "planning", { objective: "objective" });
   persistence.saveTaskExecution({ envelope: { schemaVersion: "1.0", missionId: "mission", taskId: "task", role: "planner", objective: "objective", acceptanceCriteria: [], constraints: [], requiredEvidence: ["summary"], parentTaskIds: [], attempt: 1, projectRoot: root, baseCommit: "base", sourceWorkspaceFingerprint: "fingerprint", createdAt: new Date(startedAt).toISOString(), timeoutMs: options.timeoutMs ?? 60_000 }, targetSessionId: "worker", controllerPromptMessageId: "prompt", state: "dispatched" });
-  const makeService = () => new WorkerCompletionService(adapter, persistence, { now: () => now, quietWindowMs: 1_500, assertWorkerBinding: async () => {
+  const roster = { rosterId: "r", fingerprint: "fp", serverBaseUrl: worker.serverBaseUrl, projectRoot: root, pairedAt: "2026-01-01T00:00:00.000Z", bindings: [{ sessionId: worker.id, position: 2 as const, role: "planner" as const, model: worker.model, agentName: "Planner", projectRoot: root, projectFingerprint: "fp", serverBaseUrl: worker.serverBaseUrl, sessionCreatedAt: "2026-01-01T00:00:00.000Z", pairedAt: "2026-01-01T00:00:00.000Z", rolePromptHash: "h", expectedTitle: "Planner" }] };
+  persistence.saveRoster(roster);
+  const dispatch = new DispatchOutbox(adapter, persistence, { assertCurrent: async () => roster } as never);
+  const makeService = () => new WorkerCompletionService(adapter, persistence, dispatch, { now: () => now, quietWindowMs: 1_500, assertWorkerBinding: async () => {
     const model = await adapter.getSessionModel("worker");
     if (model.providerId !== "openai" || model.modelId !== "gpt-5") throw new Error("roster drift");
-    return { agent: "orca-planner", model };
+    return { agent: "orca-planner", model, sessionId: "worker" };
   } });
-  return { adapter, persistence, worker, service: makeService(), newService: makeService, advance: (ms: number) => { now += ms; } };
+  return { adapter, persistence, worker, dispatch, service: makeService(), newService: makeService, advance: (ms: number) => { now += ms; } };
 }
 
 function resultMessage(id: string, parentId: string, result: unknown, completedAt = "2026-01-01T00:00:00.000Z"): OpenCodeMessage {

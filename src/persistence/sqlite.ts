@@ -138,7 +138,7 @@ export interface EnqueueDispatchWithPromptInput extends DispatchInput {
 
 export interface CreateMissionTaskAndDispatchInput {
   mission: CreateMissionInput;
-  task: Omit<TaskExecutionInput, "state" | "result">;
+  task: Omit<TaskExecutionInput, "state" | "result"> & { state?: TaskState };
   dispatch: Omit<DispatchInput, "missionId">;
   snapshot?: WorkspaceSnapshotInput;
   /** A narrow test/operation hook; errors here prove the enclosing write transaction rolls back. */
@@ -353,6 +353,7 @@ export class SqlitePersistence {
     });
     this.database.prepare(`UPDATE tasks SET state = @state, updated_at = @timestamp WHERE task_id = @taskId`)
       .run({ taskId: input.envelope.taskId, state, timestamp });
+    this.recordTaskPromptAttempt(input.envelope.taskId, input.controllerPromptMessageId, "worker_task", input.envelope.attempt);
   }
 
   public saveTaskResult(taskId: string, state: TaskState, result: RoleWorkerResult): void {
@@ -590,7 +591,8 @@ export class SqlitePersistence {
   } {
     return this.runInTransaction(() => {
       const mission = this.createMission(input.mission);
-      this.saveTaskExecution(input.task);
+      const taskInput: TaskExecutionInput = { ...input.task, state: input.task.state ?? "dispatched" };
+      this.saveTaskExecution(taskInput);
       if (input.snapshot) this.saveWorkspaceSnapshot(input.snapshot);
       const dispatch = this.enqueueDispatch({ ...input.dispatch, missionId: input.mission.missionId });
       input.beforeCommit?.();
