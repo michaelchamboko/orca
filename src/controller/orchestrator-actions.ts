@@ -5,6 +5,7 @@ import type { OpenCodeEvent, OpenCodeMessage } from "../integrations/opencode/ty
 import type { PairedRoster } from "../domain/types.js";
 import { validateOrchestratorAction, type OrchestratorAction } from "../domain/action-schemas.js";
 import type { WorkflowPersistence } from "./workflow-persistence.js";
+import { StableResponseTracker, initialStableResponseCheckpoint, type StableResponseCheckpoint } from "./response-stability.js";
 
 export interface OrchestratorActionIntakeOptions {
   now?: () => number;
@@ -34,10 +35,15 @@ const REASON_CODES = {
   already_recorded: "already_recorded"
 } as const;
 
+type IntakeCheckpoint = StableResponseCheckpoint & {
+  decisionPromptMessageId?: string;
+  validatedActionHash?: string;
+  firstSeenAt?: number;
+};
+
 export class OrchestratorActionIntake {
   private readonly now: () => number;
   private readonly quietWindowMs: number;
-  private readonly stableSince = new Map<string, number>();
 
   constructor(
     private readonly adapter: OpenCodeLiveAdapter,
@@ -72,6 +78,7 @@ export class OrchestratorActionIntake {
     try { message = await this.adapter.getMessage(sessionId, messageId); }
     catch { return [{ kind: "rejected", reason: "not_idle", reasonCode: REASON_CODES.not_idle }]; }
     if (message.role !== "assistant") {
+      this.recordDecisionResponse(decision.missionId, decisionPromptMessageId, messageId, hashActionEnvelopeRaw(message), "rejected", REASON_CODES.not_assistant_message, null, null);
       return [{ kind: "rejected", reason: "not_assistant_message", reasonCode: REASON_CODES.not_assistant_message }];
     }
     if (message.parentId !== decisionPromptMessageId) {
@@ -93,13 +100,33 @@ export class OrchestratorActionIntake {
       this.recordDecisionResponse(decision.missionId, decisionPromptMessageId, messageId, hashActionEnvelopeRaw(message), "rejected", REASON_CODES.schema_invalid, null, null);
       return [{ kind: "rejected", reason: validation.error.message, reasonCode: REASON_CODES.schema_invalid }];
     }
-    const key = `${decision.missionId}:${messageId}`;
-    const stableSince = this.stableSince.get(key);
-    if (stableSince === undefined || this.now() - stableSince < this.quietWindowMs) {
-      this.stableSince.set(key, stableSince ?? this.now());
+
+    const actionHash = hashActionEnvelopeRaw(message);
+    const checkpointKey = `controller:orchestrator-action:${decision.missionId}:${decisionPromptMessageId}:${messageId}`;
+    const prior = this.loadCheckpoint(checkpointKey);
+    const contentChanged = prior.validatedActionHash !== undefined && prior.validatedActionHash !== actionHash;
+    const promptChanged = prior.decisionPromptMessageId !== undefined && prior.decisionPromptMessageId !== decisionPromptMessageId;
+    if (promptChanged || contentChanged) {
+      this.persistCheckpoint(checkpointKey, { ...initialStableResponseCheckpoint, decisionPromptMessageId });
+    }
+    const activePrior = this.loadCheckpoint(checkpointKey);
+    const firstSeenAt = activePrior.firstSeenAt;
+    const elapsed = firstSeenAt === undefined ? 0 : this.now() - firstSeenAt;
+    if (elapsed < this.quietWindowMs) {
+      this.persistCheckpoint(checkpointKey, {
+        ...activePrior,
+        decisionPromptMessageId,
+        validatedActionHash: actionHash,
+        firstSeenAt: firstSeenAt ?? this.now()
+      });
       return [];
     }
+
     return this.applyValidatedAction(decision.missionId, decisionPromptMessageId, messageId, validation.value, message);
+  }
+
+  private firstSeenAt(): number | null {
+    return null;
   }
 
   private async applyValidatedAction(missionId: string, decisionPromptMessageId: string, messageId: string, action: OrchestratorAction, message: OpenCodeMessage): Promise<ActionIngestOutcome[]> {
@@ -131,6 +158,25 @@ export class OrchestratorActionIntake {
     return [{ kind: "accepted", action, decisionPromptMessageId }];
   }
 
+  private loadCheckpoint(key: string): IntakeCheckpoint {
+    const raw = this.persistence.getControllerCheckpoint(key)?.payload as IntakeCheckpoint | undefined;
+    return { ...initialStableResponseCheckpoint, ...raw };
+  }
+
+  private persistCheckpoint(key: string, checkpoint: IntakeCheckpoint): void {
+    const roster = this.persistence.getCurrentRoster();
+    this.persistence.saveControllerCheckpoint({
+      cursorKey: key,
+      rosterId: roster?.rosterId ?? null,
+      cursor: new Date(this.now()).toISOString(),
+      payload: { ...checkpoint }
+    });
+  }
+
+  private trackerFor(checkpoint: StableResponseCheckpoint): StableResponseTracker {
+    return new StableResponseTracker(checkpoint);
+  }
+
   private async lookupDecisionPromptMessageId(missionId: string): Promise<string | null> {
     const events = this.persistence.getMissionEvents(missionId);
     for (let i = events.length - 1; i >= 0; i -= 1) {
@@ -156,5 +202,5 @@ function extractFirstJsonObject(text: string): unknown {
 }
 
 function hashActionEnvelopeRaw(message: OpenCodeMessage): string {
-  return createHash("sha256").update(JSON.stringify({ role: message.role, parentId: message.parentId, parts: (message.parts ?? []).map((part) => ({ id: part.id, type: part.type, toolStatus: part.toolStatus, text: typeof part.text === "string" })) })).digest("hex");
+  return createHash("sha256").update(JSON.stringify({ role: message.role, parentId: message.parentId, completedAt: message.completedAt, parts: (message.parts ?? []).map((part) => ({ id: part.id, type: part.type, toolStatus: part.toolStatus, text: typeof part.text === "string" })) })).digest("hex");
 }

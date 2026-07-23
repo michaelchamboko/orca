@@ -2,13 +2,17 @@ import { z } from "zod";
 
 export const ORCHESTRATOR_ACTION_SCHEMA_VERSION = "1.0" as const;
 
+export const ORCHESTRATOR_ACTION_RATIONALE_MAX = 8_192;
+export const ORCHESTRATOR_ACTION_CORRECTION_ITEM_MAX = 2_048;
+export const ORCHESTRATOR_ACTION_CORRECTION_ITEMS_MAX = 20;
+
 export const orchestratorActionSchema = z.object({
   schemaVersion: z.literal(ORCHESTRATOR_ACTION_SCHEMA_VERSION),
   missionId: z.string().min(1),
   action: z.union([z.literal("approve"), z.literal("reject"), z.literal("request_completion")]),
   taskId: z.string().min(1).optional(),
-  rationale: z.string(),
-  correctionInstructions: z.array(z.string())
+  rationale: z.string().max(ORCHESTRATOR_ACTION_RATIONALE_MAX),
+  correctionInstructions: z.array(z.string().max(ORCHESTRATOR_ACTION_CORRECTION_ITEM_MAX)).max(ORCHESTRATOR_ACTION_CORRECTION_ITEMS_MAX)
 }).strict();
 
 export type OrchestratorAction = z.infer<typeof orchestratorActionSchema>;
