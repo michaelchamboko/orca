@@ -213,7 +213,7 @@ async function controllerSetup() {
   const persistence = new SqlitePersistence({ path: join(projectRoot, "state.sqlite") });
   persistences.push(persistence);
   const rosterService = new RosterService(adapter, persistence);
-  return { projectRoot, sessions, adapter, persistence, rosterService, options: { projectRoot, adapter, persistence, version: "0.1.0" } };
+  return { projectRoot, sessions, adapter, persistence, rosterService, options: { projectRoot, adapter, persistence, version: "0.1.0", port: 0 } };
 }
 
 function message(id: string, sessionId: string, createdAt: string, text: string, role: "user" | "assistant" = "user") {

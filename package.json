@@ -14,12 +14,13 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest",
     "test:unit": "vitest run tests/unit",
-    "test:integration": "vitest run tests/integration --passWithNoTests",
-    "test:contract": "vitest run tests/contract --passWithNoTests",
-    "test:e2e:fake": "vitest run tests/e2e --passWithNoTests",
-    "test:e2e:real": "vitest run tests/e2e-real --passWithNoTests",
+    "test:integration": "vitest run tests/integration",
+    "test:contract": "vitest run tests/contract",
+    "test:e2e:fake": "vitest run tests/e2e --exclude tests/e2e-real/**",
+    "test:e2e:real": "vitest run tests/e2e-real",
     "test:coverage": "vitest run --coverage",
-    "verify": "pnpm run lint && pnpm run typecheck && pnpm run test:unit && pnpm run test:integration && pnpm run test:contract && pnpm run test:e2e:fake && pnpm run build",
+    "verify:release": "pnpm run lint && pnpm run typecheck && pnpm run test:unit && pnpm run test:integration && pnpm run test:contract && pnpm run test:e2e:fake && pnpm run test:e2e:real && pnpm run test:coverage && pnpm run build",
+    "verify": "pnpm run verify:release",
     "swarmctl": "node dist/cli.js"
   },
   "dependencies": {

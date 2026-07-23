@@ -111,6 +111,21 @@ describe("authenticated controller startup", () => {
     controllers.push(winner);
   });
 
+  it("preserves the winning runtime when concurrent starts race with ephemeral ports", async () => {
+    const setup = controllerSetup();
+    await setup.rosterService.pair();
+
+    const results = await Promise.allSettled([startController({ ...setup.options, port: 0 }), startController({ ...setup.options, port: 0 })]);
+    const winner = results.find((result): result is PromiseFulfilledResult<Awaited<ReturnType<typeof startController>>> => result.status === "fulfilled")?.value;
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(winner).toBeDefined();
+    if (!winner) throw new Error("controller start race produced no winner");
+    expect(winner.address.port).toBeGreaterThan(0);
+    expect(readFileSync(join(setup.projectRoot, ".orca", "controller-token"), "utf8").trim()).toBe(winner.token);
+    controllers.push(winner);
+  });
+
   it("refuses to listen when authentication or OpenCode health fails", async () => {
     const setup = controllerSetup();
     setup.adapter.health = async () => { throw new Error("OpenCode authentication failed (401)"); };
