@@ -7,7 +7,7 @@ import type {
   TaskPromptAttemptRecord,
   WorkspaceSnapshot
 } from "../persistence/sqlite.js";
-import type { TaskState } from "../domain/types.js";
+import type { Role, TaskState } from "../domain/types.js";
 
 /** The controller's deliberately small durable-workflow contract. */
 export interface WorkflowPersistence extends RosterPersistence {
@@ -55,4 +55,8 @@ export interface WorkflowPersistence extends RosterPersistence {
   getMissionEvents(missionId: string): Array<{ taskId: string | null; eventType: string; payload: Record<string, unknown>; createdAt: string }>;
   consumeTask(taskId: string, timestamp?: string): void;
   supersedeApprovalsBefore(missionId: string, gate: string, timestamp?: string): number;
+  recordGateAttempt(missionId: string, gate: string, role: Exclude<Role, "orchestrator">, attempt: number, workspaceFingerprint: string | null, timestamp?: string): void;
+  getGateAttempts(missionId: string, gate: string): Array<{ attempt: number; role: Exclude<Role, "orchestrator">; workspaceFingerprint: string | null; createdAt: string }>;
+  getGateAttemptCount(missionId: string, gate: string): number;
+  getCurrentApproval(missionId: string, gate: string): import("../persistence/sqlite.js").ApprovalRecord | null;
 }

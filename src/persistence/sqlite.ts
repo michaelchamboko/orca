@@ -544,6 +544,37 @@ export class SqlitePersistence {
     return result.changes;
   }
 
+  public recordGateAttempt(missionId: string, gate: string, role: WorkerRole, attempt: number, workspaceFingerprint: string | null, timestamp: string = nowIso()): void {
+    this.database.prepare(`
+      INSERT INTO gate_attempts (mission_id, gate, role, attempt, workspace_fingerprint, created_at)
+      VALUES (@missionId, @gate, @role, @attempt, @workspaceFingerprint, @timestamp)
+      ON CONFLICT (mission_id, gate, attempt) DO UPDATE SET
+        workspace_fingerprint = excluded.workspace_fingerprint
+    `).run({ missionId, gate, role, attempt, workspaceFingerprint, timestamp });
+  }
+
+  public getGateAttempts(missionId: string, gate: string): Array<{ attempt: number; role: WorkerRole; workspaceFingerprint: string | null; createdAt: string }> {
+    const rows = this.database.prepare(`
+      SELECT attempt, role, workspace_fingerprint, created_at FROM gate_attempts WHERE mission_id = @missionId AND gate = @gate ORDER BY attempt ASC
+    `).all({ missionId, gate }) as Array<{ attempt: number; role: WorkerRole; workspace_fingerprint: string | null; created_at: string }>;
+    return rows.map((row) => ({ attempt: row.attempt, role: row.role, workspaceFingerprint: row.workspace_fingerprint, createdAt: row.created_at }));
+  }
+
+  public getGateAttemptCount(missionId: string, gate: string): number {
+    const row = this.database.prepare(`
+      SELECT COUNT(*) as count FROM gate_attempts WHERE mission_id = @missionId AND gate = @gate
+    `).get({ missionId, gate }) as { count: number };
+    return row.count;
+  }
+
+  public getCurrentApproval(missionId: string, gate: string): ApprovalRecord | null {
+    const row = this.database.prepare(`
+      SELECT approval_id, mission_id, task_id, decision, reason, created_at FROM orchestrator_approvals WHERE mission_id = @missionId AND gate = @gate AND superseded_at IS NULL ORDER BY created_at DESC LIMIT 1
+    `).get({ missionId, gate }) as { approval_id: string; mission_id: string; task_id: string | null; decision: "approved" | "rejected"; reason: string | null; created_at: string } | undefined;
+    if (!row) return null;
+    return { approvalId: row.approval_id, missionId: row.mission_id, taskId: row.task_id, decision: row.decision, reason: row.reason, createdAt: row.created_at };
+  }
+
   public blockTaskExecution(taskId: string, reason: string): void {
     this.runInTransaction(() => {
       const task = this.getTaskExecution(taskId);
@@ -815,7 +846,8 @@ export class SqlitePersistence {
       { version: 4, sql: rosterHistorySchemaSql },
       { version: 5, sql: completionHardeningSchemaSql },
       { version: 6, sql: orchestratorActionsSchemaSql },
-      { version: 7, sql: dispatchContractSchemaSql }
+      { version: 7, sql: dispatchContractSchemaSql },
+      { version: 8, sql: gateQualitySchemaSql }
     ];
     for (const migration of migrations) {
       if (applied.has(migration.version)) continue;
@@ -1116,4 +1148,23 @@ const dispatchContractSchemaSql = `
     FOREIGN KEY (mission_id) REFERENCES missions (mission_id) ON DELETE CASCADE
   );
   CREATE INDEX IF NOT EXISTS idx_orchestrator_decision_responses_mission ON orchestrator_decision_responses (mission_id);
+`;
+
+const gateQualitySchemaSql = `
+  CREATE TABLE IF NOT EXISTS gate_attempts (
+    mission_id TEXT NOT NULL,
+    gate TEXT NOT NULL,
+    role TEXT NOT NULL,
+    attempt INTEGER NOT NULL,
+    workspace_fingerprint TEXT,
+    approved_at TEXT,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (mission_id, gate, attempt),
+    FOREIGN KEY (mission_id) REFERENCES missions (mission_id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_gate_attempts_mission ON gate_attempts (mission_id, gate);
+  CREATE INDEX IF NOT EXISTS idx_orchestrator_approvals_current
+    ON orchestrator_approvals (mission_id, gate) WHERE superseded_at IS NULL;
+  ALTER TABLE tasks ADD COLUMN workspace_fingerprint_at_dispatch TEXT;
+  ALTER TABLE tasks ADD COLUMN source_workspace_fingerprint TEXT;
 `;

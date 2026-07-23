@@ -202,6 +202,10 @@ class MemoryPersistence implements WorkflowPersistence {
   getMissionEvents() { return []; }
   consumeTask(): void {}
   supersedeApprovalsBefore() { return 0; }
+  recordGateAttempt(): void {}
+  getGateAttempts() { return []; }
+  getGateAttemptCount() { return 0; }
+  getCurrentApproval() { return null; }
 }
 
 class MutableAdapter implements OpenCodeLiveAdapter {
