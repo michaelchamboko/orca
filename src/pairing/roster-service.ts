@@ -110,7 +110,7 @@ function bindingFor(session: OpenCodeSession, index: number, pairedAt: string): 
     serverBaseUrl: session.serverBaseUrl,
     sessionCreatedAt: pairedAt,
     pairedAt,
-    rolePromptHash: sha256(JSON.stringify({ mode: profile.mode, tools: profile.tools, instructions: profile.instructions })),
+    rolePromptHash: sha256(JSON.stringify({ mode: profile.mode, tools: profile.tools, skills: profile.skills, instructions: profile.instructions })),
     expectedTitle: session.title
   };
 }

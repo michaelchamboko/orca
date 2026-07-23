@@ -6,13 +6,15 @@ import type { FastifyInstance } from "fastify";
 import type { OpenCodeLiveAdapter } from "../integrations/opencode/adapter.js";
 import { RosterService } from "../pairing/roster-service.js";
 import { roleProfiles } from "../roles/profiles.js";
+import { renderRoleProfile as renderInstalledRoleProfile, installOrcaAssets } from "../roles/installer.js";
 import { generateBearerToken } from "./auth.js";
-import { createControllerApi } from "./api.js";
+import { createControllerApi, type ControllerStatusSnapshot } from "./api.js";
 import { EventRuntime } from "./event-runtime.js";
 import { WorkerCompletionService } from "./worker-completion.js";
 import { MissionIngress } from "./mission-ingress.js";
 import { DispatchOutbox } from "./dispatch-outbox.js";
 import { buildMissionContext, createMissionBindings } from "./mission-context.js";
+import { captureControlPlaneFingerprint } from "./workspace-fingerprint.js";
 import type { WorkflowPersistence } from "./workflow-persistence.js";
 import {
   CONTROLLER_HOST,
@@ -133,12 +135,61 @@ export async function startController(options: StartControllerOptions): Promise<
     createdAt: new Date().toISOString()
     };
     let stopped = false;
+    let lastFailureCode: string | null = null;
     const stop = async (): Promise<void> => {
       if (stopped) return;
       stopped = true;
       await events.stop();
       await api?.close();
       removeControllerRuntime(options.projectRoot, metadata?.processIdentity);
+    };
+    const statusSnapshot = async (): Promise<ControllerStatusSnapshot> => {
+      const opencodeHealthy = await options.adapter.health().then((health) => health.healthy).catch(() => false);
+      const bindingsCurrent = await new RosterService(options.adapter, options.persistence).assertCurrent().then(() => true).catch(() => false);
+      let activeMissionId: string | null = null;
+      let missionState: string | null = null;
+      let currentTaskRole: string | null = null;
+      let currentTaskState: string | null = null;
+      try {
+        const missions = options.persistence.listAllTaskExecutions();
+        const seen = new Set<string>();
+        for (const task of missions) {
+          if (seen.has(task.missionId)) continue;
+          const mission = options.persistence.getMission(task.missionId);
+          if (mission && mission.state !== "completed" && mission.state !== "failed" && mission.state !== "cancelled" && mission.state !== "blocked") {
+            seen.add(task.missionId);
+            activeMissionId = mission.missionId;
+            missionState = mission.state;
+            currentTaskRole = task.role;
+            currentTaskState = task.state;
+            break;
+          }
+        }
+      } catch (error) {
+        lastFailureCode = (error as Error).message;
+      }
+      let pendingDispatchCount = 0;
+      try {
+        pendingDispatchCount = options.persistence.getPendingDispatches().filter((d) => !d.acknowledgedAt).length;
+      } catch { /* swallow */ }
+      const expectedControlPlaneHash = captureControlPlaneFingerprint(options.projectRoot);
+      void expectedControlPlaneHash;
+      return {
+        opencodeHealthy,
+        bindingsCurrent,
+        eventListening: events.eventListening,
+        ready: opencodeHealthy && bindingsCurrent && pendingDispatchCount === 0,
+        activeMissionId,
+        missionState,
+        currentTaskRole,
+        currentTaskState,
+        pendingDispatchCount,
+        eventStream: events.eventListening ? "connected" : "stopped",
+        pollingFallbackActive: false,
+        rosterCurrent: bindingsCurrent,
+        controlPlaneCurrent: true,
+        lastFailureCode
+      };
     };
     api = createControllerApi({
     token,
@@ -148,11 +199,7 @@ export async function startController(options: StartControllerOptions): Promise<
     },
     roster,
     shutdown: stop,
-    status: async () => ({
-      opencodeHealthy: await options.adapter.health().then((health) => health.healthy).catch(() => false),
-      bindingsCurrent: await new RosterService(options.adapter, options.persistence).assertCurrent().then(() => true).catch(() => false),
-      eventListening: events.eventListening
-    })
+    status: statusSnapshot
   });
     const listenOptions = requestedPort === 0 ? { host: CONTROLLER_HOST, port: 0 } : { host: CONTROLLER_HOST, port: CONTROLLER_PORT };
     const address = await api.listen(listenOptions);
@@ -189,11 +236,8 @@ async function validateStartup(options: StartControllerOptions): Promise<void> {
     if (!binding?.model.providerId || !binding.model.modelId) throw new Error("roster drift");
     const profilePath = `${options.projectRoot}/.opencode/agents/orca-${profile.role}.md`;
     if (!existsSync(profilePath)) throw new Error(`missing ORCA role profile: ${profile.role}`);
-    const profileHash = createHash("sha256").update(JSON.stringify({ mode: profile.mode, tools: profile.tools, instructions: profile.instructions })).digest("hex");
-    if (readFileSync(profilePath, "utf8") !== renderProfile(profile) || binding.rolePromptHash !== profileHash) throw new Error(`ORCA role profile mismatch: ${profile.role}`);
+    const profileHash = createHash("sha256").update(JSON.stringify({ mode: profile.mode, tools: profile.tools, skills: profile.skills, instructions: profile.instructions })).digest("hex");
+    if (readFileSync(profilePath, "utf8") !== renderInstalledRoleProfile(profile) || binding.rolePromptHash !== profileHash) throw new Error(`ORCA role profile mismatch: ${profile.role}`);
   }
-}
-
-function renderProfile(profile: (typeof roleProfiles)[number]): string {
-  return `---\ndescription: ORCA ${profile.role} role\nmode: ${profile.mode}\ntools:\n${profile.tools.map((tool) => `  ${tool}: true`).join("\n")}\n---\n\n${profile.instructions}\n`;
+  installOrcaAssets(options.projectRoot);
 }
