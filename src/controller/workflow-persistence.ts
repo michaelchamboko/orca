@@ -22,6 +22,7 @@ export interface WorkflowPersistence extends RosterPersistence {
   recordProcessedMessage(input: ProcessedMessageInput): boolean;
   claimNextDispatch(leaseOwner: string, leaseDurationMs: number, timestamp?: string): DispatchOutboxAction | null;
   acknowledgeDispatch(id: number, leaseOwner: string, timestamp?: string): void;
+  acknowledgeTaskDispatch(id: number, leaseOwner: string, taskId: string, promptMessageId: string, timestamp?: string): void;
   releaseDispatch(id: number, leaseOwner: string, lastError?: string | null, timestamp?: string): void;
   getDispatchByPromptMessageId(promptMessageId: string): DispatchOutboxAction | null;
   enqueueDispatch(input: import("../persistence/sqlite.js").DispatchInput): DispatchOutboxAction;

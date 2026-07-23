@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { OpenCodeLiveAdapter } from "../integrations/opencode/adapter.js";
+import type { OpenCodeMessage } from "../integrations/opencode/types.js";
 import type { ModelRef, PairedRoster, Role, TaskEnvelope } from "../domain/types.js";
 import type { DispatchOutboxAction, DispatchPurpose } from "../persistence/sqlite.js";
 import type { WorkflowPersistence } from "./workflow-persistence.js";
@@ -47,9 +48,13 @@ async recoverPending(): Promise<DispatchOutboxAction[]> {
         await this.block(action, owner, `exceeded ${MAX_DELIVERY_ATTEMPTS} delivery attempts`);
         continue;
       }
+      if (action.promptPayloadError) {
+        await this.block(action, owner, action.promptPayloadError);
+        continue;
+      }
       const marker = `[ORCA_DISPATCH:${action.dispatchKey}]`;
       const messages = await this.adapter.listMessages(action.targetSessionId);
-      const correlated = messages.some((message) => message.id === action.promptMessageId || message.parts.some((part) => part.text?.includes(marker)));
+      const correlated = messages.some((message) => isDeliveredPrompt(message, action, marker));
       if (!correlated) {
         await this.adapter.sendPrompt({
           messageId: action.promptMessageId,
@@ -59,8 +64,8 @@ async recoverPending(): Promise<DispatchOutboxAction[]> {
           content: this.renderer.render(action.purpose, action.promptPayload, marker)
         });
       }
-      this.persistence.acknowledgeDispatch(action.id, owner);
-      if (action.taskId) this.persistence.setTaskExecutionState(action.taskId, "dispatched");
+      if (action.taskId) this.persistence.acknowledgeTaskDispatch(action.id, owner, action.taskId, action.promptMessageId);
+      else this.persistence.acknowledgeDispatch(action.id, owner);
       recovered.push(action);
     } catch (error) {
       const reason = error instanceof Error ? error.message : "dispatch delivery failed";
@@ -84,6 +89,14 @@ async recoverPending(): Promise<DispatchOutboxAction[]> {
     });
     this.persistence.acknowledgeDispatch(action.id, owner);
   }
+}
+
+function isDeliveredPrompt(message: OpenCodeMessage, action: DispatchOutboxAction, marker: string): boolean {
+  if (message.role !== "user" || message.id !== action.promptMessageId) return false;
+  const messageTime = Date.parse(message.createdAt);
+  const enqueueTime = Date.parse(action.createdAt);
+  if (Number.isNaN(messageTime) || Number.isNaN(enqueueTime) || messageTime < enqueueTime) return false;
+  return message.parts.some((part) => typeof part.text === "string" && part.text.includes(marker));
 }
 
 function bindingFor(roster: PairedRoster, role: Role) {

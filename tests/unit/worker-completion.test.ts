@@ -20,6 +20,7 @@ afterEach(() => {
 describe("worker completion", () => {
   it("completes only a valid, idle, tool-free output that remains stable for the quiet window", async () => {
     const setup = fixture();
+    expect(setup.persistence.getTaskPromptAttempts("task")[0]?.acknowledgedAt).toBe("2026-01-01T00:00:00.000Z");
     setup.adapter.addMessage(resultMessage("result", "prompt", plannerResult("task")));
     await setup.service.observeAll();
     expect(setup.persistence.getTask("task")?.state).toBe("dispatched");
@@ -108,8 +109,12 @@ describe("worker completion", () => {
     expect(setup.persistence.getTask("task")?.state).toBe("completed");
   });
 
-  it("times out from the envelope createdAt when no acknowledgement has been recorded", async () => {
-    const setup = fixture({ timeoutMs: 1_000 });
+  it("does not start timeout until the active prompt is acknowledged", async () => {
+    const setup = fixture({ timeoutMs: 1_000, acknowledged: false });
+    setup.advance(1_001);
+    await setup.service.observeAll();
+    expect(setup.persistence.getTask("task")?.state).toBe("dispatched");
+    setup.persistence.acknowledgeTaskPromptAttempt("task", "prompt", "2026-01-01T00:00:01.001Z");
     setup.advance(1_001);
     await setup.service.observeAll();
     expect(setup.persistence.getTask("task")?.state).toBe("blocked");
@@ -172,7 +177,7 @@ describe("worker completion", () => {
   });
 });
 
-function fixture(options: { timeoutMs?: number } = {}) {
+function fixture(options: { timeoutMs?: number; acknowledged?: boolean } = {}) {
   const root = mkdtempSync(join(tmpdir(), "orca-completion-"));
   roots.push(root);
   const worker: OpenCodeSession = { id: "worker", position: 2, serverBaseUrl: "http://127.0.0.1:4096", projectRoot: root, model: { providerId: "openai", modelId: "gpt-5" }, title: "Planner", status: "idle", inFlightToolCalls: 0 };
@@ -183,6 +188,7 @@ function fixture(options: { timeoutMs?: number } = {}) {
   let now = startedAt;
   persistence.saveMission("mission", "planning", { objective: "objective" });
   persistence.saveTaskExecution({ envelope: { schemaVersion: "1.0", missionId: "mission", taskId: "task", role: "planner", objective: "objective", acceptanceCriteria: [], constraints: [], requiredEvidence: ["summary"], parentTaskIds: [], attempt: 1, projectRoot: root, baseCommit: "base", sourceWorkspaceFingerprint: "fingerprint", createdAt: new Date(startedAt).toISOString(), timeoutMs: options.timeoutMs ?? 60_000 }, targetSessionId: "worker", controllerPromptMessageId: "prompt", state: "dispatched" });
+  if (options.acknowledged !== false) persistence.acknowledgeTaskPromptAttempt("task", "prompt", new Date(startedAt).toISOString());
   const roster = { rosterId: "r", fingerprint: "fp", serverBaseUrl: worker.serverBaseUrl, projectRoot: root, pairedAt: "2026-01-01T00:00:00.000Z", bindings: [{ sessionId: worker.id, position: 2 as const, role: "planner" as const, model: worker.model, agentName: "Planner", projectRoot: root, projectFingerprint: "fp", serverBaseUrl: worker.serverBaseUrl, sessionCreatedAt: "2026-01-01T00:00:00.000Z", pairedAt: "2026-01-01T00:00:00.000Z", rolePromptHash: "h", expectedTitle: "Planner" }] };
   persistence.saveRoster(roster);
   const dispatch = new DispatchOutbox(adapter, persistence, { assertCurrent: async () => roster } as never);

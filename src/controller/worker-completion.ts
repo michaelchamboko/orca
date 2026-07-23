@@ -58,9 +58,9 @@ export class WorkerCompletionService {
     if (this.isTerminal(task)) { this.trackers.delete(task.taskId); return; }
     const attempts = this.persistence.getTaskPromptAttempts(task.taskId);
     const initialAttempt = attempts.find((attempt) => attempt.purpose === "worker_task");
-    const timeoutOrigin = initialAttempt?.acknowledgedAt
-      ? Date.parse(initialAttempt.acknowledgedAt)
-      : Date.parse(task.envelope.createdAt);
+    const timeoutOriginValue = initialAttempt ? initialAttempt.acknowledgedAt : task.envelope.createdAt;
+    if (!timeoutOriginValue) return;
+    const timeoutOrigin = Date.parse(timeoutOriginValue);
     if (this.now() - timeoutOrigin > task.timeoutMs) return this.block(task, "worker completion timed out");
     let binding: Binding;
     try { binding = await this.options.assertWorkerBinding(task); } catch { return this.block(task, "roster drift or worker session closure prevented completion recovery"); }
@@ -106,10 +106,7 @@ export class WorkerCompletionService {
 
   private async recordContractViolation(task: TaskExecutionRecord, offendingOutputMessageId: string, tracker: StableResponseTracker, binding: Binding): Promise<void> {
     const checkpoint = this.persistence.getControllerCheckpoint(`controller:worker-completion:${task.taskId}`)?.payload as Checkpoint | undefined;
-    if (checkpoint?.lastInvalidOutputMessageId === offendingOutputMessageId && (checkpoint.contractRepairs ?? 0) >= REPAIR_ATTEMPT_CAP) {
-      this.block(task, "worker returned a second invalid result contract");
-      return;
-    }
+    if (checkpoint?.lastInvalidOutputMessageId === offendingOutputMessageId) return;
     const attempts = this.persistence.getTaskPromptAttempts(task.taskId);
     const repairs = attempts.filter((attempt) => attempt.purpose === "contract_repair").length;
     if (repairs >= REPAIR_ATTEMPT_CAP) {
@@ -136,7 +133,11 @@ export class WorkerCompletionService {
         promptPayload: { kind: "contract_repair", contract: "worker_result", envelope: task.envelope, originalPromptMessageId: task.controllerPromptMessageId }
       });
     });
-    void this.dispatchOutbox.recoverPending().catch(() => this.block(task, "worker contract-repair prompt could not be delivered"));
+    try {
+      await this.dispatchOutbox.recoverPending();
+    } catch {
+      this.persistCheckpoint(task, tracker, { lastFailureReason: "contract repair delivery pending" });
+    }
   }
 
   private recordPollFailure(task: TaskExecutionRecord): void {

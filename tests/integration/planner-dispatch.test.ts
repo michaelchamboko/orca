@@ -185,14 +185,16 @@ describe("Planner mission ingress", () => {
       task: { envelope, targetSessionId: "session-2", controllerPromptMessageId: "prompt-recovery" },
       dispatch: { dispatchKey: "dispatch-recovery", targetRole: "planner", targetSessionId: "session-2", capturedModel: { providerId: "openai", modelId: "gpt-5" }, promptMessageId: "prompt-recovery" }
     });
-    setup.adapter.addMessage(message("prompt-recovery-observed", "session-2", new Date().toISOString(), "[ORCA_DISPATCH:dispatch-recovery]", "assistant"));
+    setup.adapter.addMessage(message("prompt-recovery", "session-2", new Date().toISOString(), "[ORCA_DISPATCH:dispatch-recovery]"));
 
     const controller = await startController(setup.options);
     controllers.push(controller);
 
     expect(setup.adapter.prompts()).toEqual([]);
     expect(setup.persistence.getPendingDispatches()).toEqual([]);
+    expect(setup.persistence.getDispatchByPromptMessageId("prompt-recovery")?.promptPayload).toMatchObject({ kind: "worker_task" });
     expect(setup.persistence.getTask("task-recovery")?.state).toBe("dispatched");
+    expect(setup.persistence.getMission("mission-recovery")?.state).toBe("planning");
   });
 });
 

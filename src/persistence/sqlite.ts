@@ -118,6 +118,7 @@ export interface DispatchOutboxAction extends DispatchInput {
   purpose: DispatchPurpose;
   parentPromptMessageId: string | null;
   promptPayload: Record<string, JsonLike>;
+  promptPayloadError: string | null;
 }
 
 export interface TaskPromptAttemptRecord {
@@ -442,7 +443,7 @@ export class SqlitePersistence {
       ON CONFLICT (task_id, prompt_message_id) DO UPDATE SET
         purpose = excluded.purpose,
         attempt = excluded.attempt,
-        acknowledged_at = excluded.acknowledged_at
+        acknowledged_at = COALESCE(task_prompt_attempts.acknowledged_at, excluded.acknowledged_at)
     `).run({ taskId, promptMessageId, purpose, attempt, acknowledgedAt, createdAt });
     return { taskId, promptMessageId, purpose, attempt, acknowledgedAt, createdAt };
   }
@@ -839,9 +840,15 @@ export class SqlitePersistence {
   public enqueueDispatch(input: DispatchInput): DispatchOutboxAction {
     const timestamp = nowIso();
     const purpose = input.purpose ?? "worker_task";
-    const taskId = input.taskId ?? null;
+    const inferredTask = purpose === "worker_task" && !input.taskId
+      ? this.getTaskExecutionByPromptMessageId(input.promptMessageId)
+      : null;
+    const taskId = input.taskId ?? inferredTask?.taskId ?? null;
     const parentPromptMessageId = input.parentPromptMessageId ?? null;
-    const promptPayload = toJsonString(input.promptPayload ?? {});
+    const promptPayloadValue = input.promptPayload ?? (purpose === "worker_task" && inferredTask
+      ? { kind: "worker_task", objective: inferredTask.envelope.objective, envelope: inferredTask.envelope }
+      : {});
+    const promptPayload = toJsonString(promptPayloadValue);
     this.database.prepare(`
       INSERT INTO dispatch_outbox (
         mission_id, dispatch_key, target_role, target_session_id, model_provider_id, model_id, prompt_message_id,
@@ -926,6 +933,14 @@ export class SqlitePersistence {
       WHERE id = @id AND lease_owner = @leaseOwner AND acknowledged_at IS NULL
     `).run({ id, leaseOwner, timestamp: acknowledgedAt });
     if (result.changes === 0) throw new Error(`dispatch is not claimed by ${leaseOwner}: ${id}`);
+  }
+
+  public acknowledgeTaskDispatch(id: number, leaseOwner: string, taskId: string, promptMessageId: string, timestamp = nowIso()): void {
+    this.runInTransaction(() => {
+      const acknowledgedAt = normalizeTimestamp(timestamp);
+      this.acknowledgeDispatch(id, leaseOwner, acknowledgedAt);
+      this.acknowledgeTaskPromptAttempt(taskId, promptMessageId, acknowledgedAt);
+    });
   }
 
   /** Returns false when the same idempotency hash has already been recorded. */
@@ -1030,6 +1045,7 @@ interface DispatchOutboxRow {
 }
 
 function dispatchFromRow(row: DispatchOutboxRow): DispatchOutboxAction {
+  const parsedPayload = parsePromptPayload(row.prompt_payload, row.purpose);
   return {
     id: row.id,
     missionId: row.mission_id,
@@ -1049,14 +1065,22 @@ function dispatchFromRow(row: DispatchOutboxRow): DispatchOutboxAction {
     taskId: row.task_id,
     purpose: row.purpose,
     parentPromptMessageId: row.parent_prompt_message_id,
-    promptPayload: parsePromptPayload(row.prompt_payload)
+    promptPayload: parsedPayload.payload,
+    promptPayloadError: parsedPayload.error
   };
 }
 
-function parsePromptPayload(value: string): Record<string, JsonLike> {
-  if (!value) return {};
-  try { return parseJson<Record<string, JsonLike>>(value); }
-  catch { return {}; }
+function parsePromptPayload(value: string, purpose: DispatchPurpose): { payload: Record<string, JsonLike>; error: string | null } {
+  if (!value) return { payload: {}, error: "malformed prompt payload" };
+  try {
+    const payload = parseJson<unknown>(value);
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return { payload: {}, error: "malformed prompt payload" };
+    const record = payload as Record<string, JsonLike>;
+    if (record.kind !== purpose) return { payload: {}, error: "prompt payload purpose mismatch" };
+    return { payload: record, error: null };
+  } catch {
+    return { payload: {}, error: "malformed prompt payload" };
+  }
 }
 
 const initialSchemaSql = `

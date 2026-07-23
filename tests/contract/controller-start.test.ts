@@ -165,6 +165,7 @@ class MemoryPersistence implements WorkflowPersistence {
   recordProcessedMessage(): boolean { return true; }
   claimNextDispatch() { return null; }
   acknowledgeDispatch(): void {}
+  acknowledgeTaskDispatch(): void {}
   releaseDispatch(): void {}
   getPendingDispatches() { return []; }
   getTaskExecutionByPromptMessageId() { return null; }
