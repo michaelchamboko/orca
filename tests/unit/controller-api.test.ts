@@ -28,7 +28,7 @@ const roster: PairedRoster = {
   bindings: []
 };
 
-function makeMetadata(workspace: string) {
+function makeMetadata() {
   return {
     schemaVersion: 1 as const,
     pid: 42,
@@ -58,26 +58,26 @@ const healthyStatus: ControllerStatusSnapshot = {
 
 describe("controller API", () => {
   it("rejects unauthenticated health requests", async () => {
-    const workspace = makeWorkspace();
+    makeWorkspace();
     const api = createControllerApi({
       token: "secret-token",
-      metadata: makeMetadata(workspace),
-      roster,
-      status: async () => healthyStatus,
-      shutdown: async () => undefined
-    });
-    const response = await api.inject({ method: "GET", url: "/health" });
-    expect(response.statusCode).toBe(401);
+metadata: makeMetadata(),
+    roster,
+    status: async () => healthyStatus,
+    shutdown: async () => undefined
+  });
+  const response = await api.inject({ method: "GET", url: "/status" });
+  expect(response.statusCode).toBe(401);
     await api.close();
   });
 
   it("rejects unauthenticated status requests", async () => {
-    const workspace = makeWorkspace();
+    makeWorkspace();
     const api = createControllerApi({
       token: "secret-token",
-      metadata: makeMetadata(workspace),
-      roster,
-      status: async () => ({ ...healthyStatus, ready: false }),
+metadata: makeMetadata(),
+    roster,
+    status: async () => ({ ...healthyStatus, ready: false }),
       shutdown: async () => undefined
     });
     const response = await api.inject({ method: "GET", url: "/status" });
@@ -86,10 +86,10 @@ describe("controller API", () => {
   });
 
   it("returns a redacted liveness payload on /health", async () => {
-    const workspace = makeWorkspace();
+    makeWorkspace();
     const api = createControllerApi({
       token: "secret-token",
-      metadata: makeMetadata(workspace),
+      metadata: makeMetadata(),
       roster,
       status: async () => healthyStatus,
       shutdown: async () => undefined
@@ -110,10 +110,10 @@ describe("controller API", () => {
   });
 
   it("returns the readiness snapshot on /status without raw model output", async () => {
-    const workspace = makeWorkspace();
+    makeWorkspace();
     const api = createControllerApi({
       token: "secret-token",
-      metadata: () => makeMetadata(workspace),
+      metadata: () => makeMetadata(),
       roster,
       status: async () => ({ ...healthyStatus, ready: false, lastFailureCode: "roster_drift" }),
       shutdown: async () => undefined
@@ -136,11 +136,11 @@ describe("controller API", () => {
   });
 
   it("accepts shutdown and invokes the shutdown hook", async () => {
-    const workspace = makeWorkspace();
+    makeWorkspace();
     let stopped = false;
     const api = createControllerApi({
       token: "secret-token",
-      metadata: makeMetadata(workspace),
+      metadata: makeMetadata(),
       roster,
       status: async () => healthyStatus,
       shutdown: async () => { stopped = true; }
