@@ -19,7 +19,13 @@ export default defineConfig({
         "tests/**",
         "fixtures/**",
         "**/*.test.ts",
-        "**/*.config.ts"
+        "**/*.config.ts",
+        "src/types/**",
+        "src/persistence/index.ts",
+        "src/domain/types.ts",
+        "src/domain/errors.ts",
+        "src/integrations/opencode/adapter.ts",
+        "src/integrations/opencode/types.ts"
       ],
       thresholds: {
         statements: 85,

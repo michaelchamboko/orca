@@ -117,6 +117,16 @@ function setup() {
         promptMessageId: `orca-prompt-${taskId}`,
         dispatchKey: `dispatch-${taskId}`
       };
+    },
+    nextDecisionPrompt: (missionId: string, gate: "plan" | "builder" | "review" | "test" | "final", taskId: string) => {
+      const binding = roster.bindings.find((b) => b.role === "orchestrator");
+      if (!binding) throw new Error("missing orchestrator binding");
+      return {
+        targetSessionId: binding.sessionId,
+        capturedModel: binding.model,
+        promptMessageId: `orca-decision-${gate}-${taskId}`,
+        dispatchKey: `dispatch-decision-${missionId}-${gate}-${taskId}`
+      };
     }
   };
   return { adapter, persistence, context, roster };

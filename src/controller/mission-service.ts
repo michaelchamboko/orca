@@ -40,6 +40,7 @@ export interface MissionActionContext {
   getRoster(): Promise<PairedRoster>;
   bind(role: Role): { sessionId: string; agentName: string; model: ModelRef };
   nextTaskForRole(role: Role, attempt: number): { envelope: TaskEnvelope; targetSessionId: string; capturedModel: ModelRef; promptMessageId: string; dispatchKey: string };
+  nextDecisionPrompt(missionId: string, gate: "plan" | "builder" | "review" | "test" | "final", taskId: string): { targetSessionId: string; capturedModel: ModelRef; promptMessageId: string; dispatchKey: string };
   publishNotice?(content: string, correlationId: string): Promise<void>;
 }
 
@@ -53,18 +54,49 @@ export class MissionService {
   /**
    * Reconcile completed-but-unconsumed tasks on startup so a restart never
    * re-advances a task the controller already finished before crashing.
+   * The reconciliation advances the mission into the next approval gate and
+   * enqueues the orchestrator decision dispatch so the workflow is genuinely
+   * auto-completed.
    */
   reconcileCompletedTasks(): number {
     const allTasks = this.persistence.listAllTaskExecutions();
     let reconciled = 0;
     for (const task of allTasks) {
-      if (task.state === "completed" && task.result !== null && task.consumedAt === null) {
+      if (task.result === null || task.consumedAt !== null) continue;
+      const mission = this.persistence.getMission(task.missionId);
+      if (!mission) continue;
+      const nextState = nextStateAfterCompletion(mission.state);
+      if (nextState === null) {
         this.persistence.runInTransaction(() => {
           this.persistence.consumeTask(task.taskId);
-          this.persistence.recordMissionEvent(task.missionId, task.taskId, "task.reconciled", { taskId: task.taskId, role: task.role });
+          this.persistence.recordMissionEvent(task.missionId, task.taskId, "task.consumed", { taskId: task.taskId, role: task.role });
         });
         reconciled += 1;
+        continue;
       }
+      const gate = gateFromNextState(nextState);
+      this.persistence.runInTransaction(() => {
+        this.persistence.consumeTask(task.taskId);
+        this.persistence.saveMission(task.missionId, nextState, { ...(mission.payload ?? {}), failureReason: null });
+        this.persistence.recordMissionEvent(task.missionId, task.taskId, "task.consumed", { taskId: task.taskId, role: task.role });
+        this.persistence.recordMissionEvent(task.missionId, null, "mission.transition", { from: mission.state, to: nextState });
+        if (gate !== null) {
+          const decision = this.context.nextDecisionPrompt(task.missionId, gate, task.taskId);
+          this.persistence.enqueueDispatch({
+            missionId: task.missionId,
+            dispatchKey: decision.dispatchKey,
+            targetRole: "orchestrator",
+            targetSessionId: decision.targetSessionId,
+            capturedModel: decision.capturedModel,
+            promptMessageId: decision.promptMessageId,
+            purpose: "orchestrator_decision",
+            parentPromptMessageId: task.controllerPromptMessageId,
+            promptPayload: { kind: "orchestrator_decision", missionId: task.missionId, taskId: task.taskId, gate, result: task.result }
+          });
+          this.persistence.recordMissionEvent(task.missionId, task.taskId, "task.dispatched", { role: "orchestrator", dispatchKey: decision.dispatchKey });
+        }
+      });
+      reconciled += 1;
     }
     return reconciled;
   }
@@ -259,6 +291,36 @@ function nextStateForApproval(state: MissionState): MissionState {
       return "completed";
     default:
       throw new Error(`unsupported approval state: ${state}`);
+  }
+}
+
+function nextStateAfterCompletion(state: MissionState): MissionState | null {
+  switch (state) {
+    case "planning":
+      return "awaiting_plan_approval";
+    case "building":
+      return "awaiting_builder_approval";
+    case "reviewing":
+      return "awaiting_review_approval";
+    case "testing":
+      return "awaiting_test_approval";
+    default:
+      return null;
+  }
+}
+
+function gateFromNextState(state: MissionState): "plan" | "builder" | "review" | "test" | null {
+  switch (state) {
+    case "awaiting_plan_approval":
+      return "plan";
+    case "awaiting_builder_approval":
+      return "builder";
+    case "awaiting_review_approval":
+      return "review";
+    case "awaiting_test_approval":
+      return "test";
+    default:
+      return null;
   }
 }
 

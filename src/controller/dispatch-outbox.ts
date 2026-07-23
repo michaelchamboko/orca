@@ -32,50 +32,50 @@ export class DispatchOutbox {
     this.renderer = renderer ?? defaultRenderer;
   }
 
-  async recoverPending(): Promise<DispatchOutboxAction[]> {
-    const owner = `dispatch-outbox-${randomUUID()}`;
-    const recovered: DispatchOutboxAction[] = [];
-    for (;;) {
-      const action = this.persistence.claimNextDispatch(owner, LEASE_MS);
-      if (!action) return recovered;
-      try {
-        const roster = await this.rosterService.assertCurrent();
-        const binding = bindingFor(roster, action.targetRole);
-        if (action.targetSessionId !== binding.sessionId) throw new Error("roster drift: session mismatch");
-        if (action.capturedModel.providerId !== binding.model.providerId || action.capturedModel.modelId !== binding.model.modelId) throw new Error("roster drift: model mismatch");
-        if (action.attempt > MAX_DELIVERY_ATTEMPTS) {
-          await this.block(action, owner, `exceeded ${MAX_DELIVERY_ATTEMPTS} delivery attempts`);
-          continue;
-        }
-        const marker = `[ORCA_DISPATCH:${action.dispatchKey}]`;
-        const messages = await this.adapter.listMessages(action.targetSessionId);
-        const correlated = messages.some((message) => message.id === action.promptMessageId || message.parts.some((part) => part.text?.includes(marker)));
-        if (!correlated) {
-          await this.adapter.sendPrompt({
-            messageId: action.promptMessageId,
-            sessionId: action.targetSessionId,
-            agent: `orca-${binding.role}`,
-            model: { ...binding.model },
-            content: this.renderer.render(action.purpose, action.promptPayload, marker)
-          });
-        }
-        this.persistence.acknowledgeDispatch(action.id, owner);
-        if (action.taskId) this.persistence.setTaskExecutionState(action.taskId, "dispatched");
-        recovered.push(action);
-      } catch (error) {
-        const reason = error instanceof Error ? error.message : "dispatch delivery failed";
-        if (reason.startsWith("roster drift")) {
-          await this.block(action, owner, reason);
-          continue;
-        }
-        if (action.attempt >= MAX_DELIVERY_ATTEMPTS) {
-          await this.block(action, owner, reason);
-          continue;
-        }
-        this.persistence.releaseDispatch(action.id, owner, reason);
+async recoverPending(): Promise<DispatchOutboxAction[]> {
+  const owner = `dispatch-outbox-${randomUUID()}`;
+  const recovered: DispatchOutboxAction[] = [];
+  for (;;) {
+    const action = this.persistence.claimNextDispatch(owner, LEASE_MS);
+    if (!action) return recovered;
+    try {
+      const roster = await this.rosterService.assertCurrent();
+      const binding = bindingFor(roster, action.targetRole);
+      if (action.targetSessionId !== binding.sessionId) throw new Error("roster drift: session mismatch");
+      if (action.capturedModel.providerId !== binding.model.providerId || action.capturedModel.modelId !== binding.model.modelId) throw new Error("roster drift: model mismatch");
+      if (action.attempt > MAX_DELIVERY_ATTEMPTS) {
+        await this.block(action, owner, `exceeded ${MAX_DELIVERY_ATTEMPTS} delivery attempts`);
+        continue;
       }
+      const marker = `[ORCA_DISPATCH:${action.dispatchKey}]`;
+      const messages = await this.adapter.listMessages(action.targetSessionId);
+      const correlated = messages.some((message) => message.id === action.promptMessageId || message.parts.some((part) => part.text?.includes(marker)));
+      if (!correlated) {
+        await this.adapter.sendPrompt({
+          messageId: action.promptMessageId,
+          sessionId: action.targetSessionId,
+          agent: `orca-${binding.role}`,
+          model: { ...binding.model },
+          content: this.renderer.render(action.purpose, action.promptPayload, marker)
+        });
+      }
+      this.persistence.acknowledgeDispatch(action.id, owner);
+      if (action.taskId) this.persistence.setTaskExecutionState(action.taskId, "dispatched");
+      recovered.push(action);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "dispatch delivery failed";
+      if (reason.startsWith("roster drift")) {
+        await this.block(action, owner, reason);
+        continue;
+      }
+      if (action.attempt >= MAX_DELIVERY_ATTEMPTS) {
+        await this.block(action, owner, reason);
+        continue;
+      }
+      this.persistence.releaseDispatch(action.id, owner, reason);
     }
   }
+}
 
   private async block(action: DispatchOutboxAction, owner: string, reason: string): Promise<void> {
     this.persistence.runInTransaction(() => {

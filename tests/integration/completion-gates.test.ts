@@ -57,8 +57,8 @@ describe("CompletionGateEvaluator", () => {
   it("rejects completion when pending permission requests exist", () => {
     const { persistence, root } = setup();
     persistence.createMission({ missionId: "mission-1", rosterId: "roster-1", objective: "test", sourceSessionMessageId: "src", state: "awaiting_final_approval" });
-    persistence.recordApproval({ approvalId: "ap-review", missionId: "mission-1", taskId: null, decision: "approved", reason: null });
-    persistence.recordApproval({ approvalId: "ap-test", missionId: "mission-1", taskId: null, decision: "approved", reason: null });
+    persistence.recordApproval({ approvalId: "ap-review", missionId: "mission-1", decision: "approved" });
+    persistence.recordApproval({ approvalId: "ap-test", missionId: "mission-1", decision: "approved" });
     persistence.recordPermissionRequest({ missionId: "mission-1", sessionId: "session-3", toolName: "bash", details: {} });
     const evaluator = new CompletionGateEvaluator({ persistence, projectRoot: root, controlPlaneHash: "cp", configHash: "cfg" });
     const result = evaluator.evaluate({ missionId: "mission-1", fingerprint: "fp", configuredChecks: [], pendingPermissionCount: 1, hasExplicitCompletionRequest: true });
@@ -69,8 +69,8 @@ describe("CompletionGateEvaluator", () => {
   it("rejects completion when the orchestrator has not requested completion", () => {
     const { persistence, root } = setup();
     persistence.createMission({ missionId: "mission-1", rosterId: "roster-1", objective: "test", sourceSessionMessageId: "src", state: "awaiting_final_approval" });
-    persistence.recordApproval({ approvalId: "ap-review", missionId: "mission-1", taskId: null, decision: "approved", reason: null });
-    persistence.recordApproval({ approvalId: "ap-test", missionId: "mission-1", taskId: null, decision: "approved", reason: null });
+    persistence.recordApproval({ approvalId: "ap-review", missionId: "mission-1", decision: "approved" });
+    persistence.recordApproval({ approvalId: "ap-test", missionId: "mission-1", decision: "approved" });
     const evaluator = new CompletionGateEvaluator({ persistence, projectRoot: root, controlPlaneHash: "cp", configHash: "cfg" });
     const result = evaluator.evaluate({ missionId: "mission-1", fingerprint: "fp", configuredChecks: [], pendingPermissionCount: 0, hasExplicitCompletionRequest: false });
     expect(result.missing).toContain("explicitRequestCompletion");

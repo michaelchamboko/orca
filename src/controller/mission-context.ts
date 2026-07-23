@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import type { OpenCodeLiveAdapter } from "../integrations/opencode/adapter.js";
 import type {
@@ -27,6 +27,12 @@ export interface MissionContextBindings {
   bind(role: Role): { sessionId: string; agentName: string; model: ModelRef };
   nextTaskForRole(role: Exclude<Role, "orchestrator">, attempt: number): {
     envelope: TaskEnvelope;
+    targetSessionId: string;
+    capturedModel: ModelRef;
+    promptMessageId: string;
+    dispatchKey: string;
+  };
+  nextDecisionPrompt(missionId: string, gate: DecisionGate, taskId: string): {
     targetSessionId: string;
     capturedModel: ModelRef;
     promptMessageId: string;
@@ -142,6 +148,19 @@ export function createMissionBindings(roster: PairedRoster, missionId: string): 
       };
       return {
         envelope,
+        targetSessionId: binding.sessionId,
+        capturedModel: { ...binding.model },
+        promptMessageId,
+        dispatchKey
+      };
+    },
+    nextDecisionPrompt(missionId: string, gate: DecisionGate, taskId: string) {
+      const binding = roster.bindings.find((candidate) => candidate.role === "orchestrator");
+      if (!binding) throw new Error("roster drift: missing orchestrator binding");
+      const seed = `${missionId}-${gate}-${taskId}-${randomUUID()}`;
+      const promptMessageId = stableId("orca-decision", gate as unknown as Role, seed, Math.floor(Date.now() / 1000));
+      const dispatchKey = stableId("dispatch-decision", gate as unknown as Role, seed, Math.floor(Date.now() / 1000));
+      return {
         targetSessionId: binding.sessionId,
         capturedModel: { ...binding.model },
         promptMessageId,
