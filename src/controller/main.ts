@@ -12,6 +12,7 @@ import { EventRuntime } from "./event-runtime.js";
 import { WorkerCompletionService } from "./worker-completion.js";
 import { MissionIngress } from "./mission-ingress.js";
 import { DispatchOutbox } from "./dispatch-outbox.js";
+import { buildMissionContext, createMissionBindings } from "./mission-context.js";
 import type { WorkflowPersistence } from "./workflow-persistence.js";
 import {
   CONTROLLER_HOST,
@@ -109,7 +110,19 @@ export async function startController(options: StartControllerOptions): Promise<
         return { agent: `orca-${binding.role}`, model: { ...binding.model }, sessionId: binding.sessionId };
       }
     });
-    const events = new EventRuntime(options.adapter, new MissionIngress(options.projectRoot, options.adapter, options.persistence, rosterService, dispatch), dispatch, completion);
+    const missionContext = buildMissionContext({
+      adapter: options.adapter,
+      persistence: options.persistence,
+      rosterService,
+      bindings: createMissionBindings(roster, "bootstrap")
+    });
+    const events = new EventRuntime(
+      options.adapter,
+      new MissionIngress(options.projectRoot, options.adapter, options.persistence, rosterService, dispatch),
+      dispatch,
+      completion,
+      missionContext
+    );
     const token = generateBearerToken();
     metadata = {
     schemaVersion: 1,
