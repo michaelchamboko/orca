@@ -38,7 +38,7 @@ export interface StartControllerOptions {
 export interface RunningController {
   readonly api: FastifyInstance;
   readonly token: string;
-  readonly address: { host: typeof CONTROLLER_HOST; port: typeof CONTROLLER_PORT };
+  readonly address: { host: typeof CONTROLLER_HOST; port: number };
   stop(): Promise<void>;
 }
 
@@ -88,7 +88,8 @@ export async function controllerStatus(projectRoot: string): Promise<ControllerS
 }
 
 export async function startController(options: StartControllerOptions): Promise<RunningController> {
-  if (options.port !== undefined && options.port !== CONTROLLER_PORT) throw new Error(`controller must bind ${CONTROLLER_HOST}:${CONTROLLER_PORT}`);
+  const port = options.port ?? CONTROLLER_PORT;
+  if (!Number.isInteger(port) || port <= 0 || port > 65_535) throw new Error("controller must bind a valid integer TCP port");
   const claim = claimControllerStart(options.projectRoot, randomUUID());
   let api: FastifyInstance | undefined;
   let metadata: ControllerRuntimeMetadata | undefined;
@@ -110,12 +111,12 @@ export async function startController(options: StartControllerOptions): Promise<
     const events = new EventRuntime(options.adapter, new MissionIngress(options.projectRoot, options.adapter, options.persistence, rosterService, dispatch), dispatch, completion);
     const token = generateBearerToken();
     metadata = {
-    schemaVersion: 1,
-    pid: process.pid,
-    processIdentity: randomUUID(),
-    port: CONTROLLER_PORT,
-    version: options.version,
-    createdAt: new Date().toISOString()
+      schemaVersion: 1,
+      pid: process.pid,
+      processIdentity: randomUUID(),
+      port,
+      version: options.version,
+      createdAt: new Date().toISOString()
     };
     let stopped = false;
     const stop = async (): Promise<void> => {
@@ -126,20 +127,20 @@ export async function startController(options: StartControllerOptions): Promise<
       removeControllerRuntime(options.projectRoot, metadata?.processIdentity);
     };
     api = createControllerApi({
-    token,
-    metadata,
-    roster,
-    shutdown: stop,
-    status: async () => ({
-      opencodeHealthy: await options.adapter.health().then((health) => health.healthy).catch(() => false),
-      bindingsCurrent: await new RosterService(options.adapter, options.persistence).assertCurrent().then(() => true).catch(() => false),
-      eventListening: events.eventListening
-    })
-  });
-    await api.listen({ host: CONTROLLER_HOST, port: CONTROLLER_PORT });
+      token,
+      metadata,
+      roster,
+      shutdown: stop,
+      status: async () => ({
+        opencodeHealthy: await options.adapter.health().then((health) => health.healthy).catch(() => false),
+        bindingsCurrent: await new RosterService(options.adapter, options.persistence).assertCurrent().then(() => true).catch(() => false),
+        eventListening: events.eventListening
+      })
+    });
+    await api.listen({ host: CONTROLLER_HOST, port });
     await events.start();
     writeControllerRuntime(options.projectRoot, metadata, token);
-    return { api, token, address: { host: CONTROLLER_HOST, port: CONTROLLER_PORT }, stop };
+    return { api, token, address: { host: CONTROLLER_HOST, port }, stop };
   } catch (error) {
     await api?.close();
     if (metadata) removeControllerRuntime(options.projectRoot, metadata.processIdentity);

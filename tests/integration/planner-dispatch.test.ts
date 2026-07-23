@@ -16,6 +16,8 @@ import { stableId } from "../../src/controller/mission-ingress.js";
 const workspaces: string[] = [];
 const controllers: Array<{ stop(): Promise<void> }> = [];
 const persistences: SqlitePersistence[] = [];
+const workerPortBase = 51_000 + (Number.parseInt(process.env.VITEST_WORKER_ID ?? "0", 10) || 0) * 10;
+let nextControllerPort = 0;
 
 afterEach(async () => {
   await Promise.all(controllers.splice(0).map((controller) => controller.stop()));
@@ -197,6 +199,7 @@ describe("Planner mission ingress", () => {
 });
 
 async function controllerSetup() {
+  const port = workerPortBase + nextControllerPort++;
   const projectRoot = mkdtempSync(join(tmpdir(), "orca-dispatch-"));
   workspaces.push(projectRoot);
   mkdirSync(join(projectRoot, ".orca"));
@@ -213,7 +216,7 @@ async function controllerSetup() {
   const persistence = new SqlitePersistence({ path: join(projectRoot, "state.sqlite") });
   persistences.push(persistence);
   const rosterService = new RosterService(adapter, persistence);
-  return { projectRoot, sessions, adapter, persistence, rosterService, options: { projectRoot, adapter, persistence, version: "0.1.0" } };
+  return { projectRoot, sessions, adapter, persistence, rosterService, options: { projectRoot, adapter, persistence, version: "0.1.0", port } };
 }
 
 function message(id: string, sessionId: string, createdAt: string, text: string, role: "user" | "assistant" = "user") {

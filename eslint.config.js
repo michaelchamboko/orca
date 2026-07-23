@@ -7,7 +7,7 @@ import prettierConfig from "eslint-config-prettier";
 /** @type {import('eslint').Linter.FlatConfig[]} */
 const config = [
   {
-    ignores: ["dist/**", "coverage/**", "node_modules/**"]
+    ignores: ["dist/**", "coverage/**", "node_modules/**", ".gitnexus/**"]
   },
   js.configs.recommended,
   {
@@ -25,6 +25,12 @@ const config = [
         , RequestInit: "readonly"
         , Response: "readonly"
         , fetch: "readonly"
+        , NodeJS: "readonly"
+        , setTimeout: "readonly"
+        , clearTimeout: "readonly"
+        , setInterval: "readonly"
+        , clearInterval: "readonly"
+        , console: "readonly"
       },
       parserOptions: {
         ecmaVersion: "latest",

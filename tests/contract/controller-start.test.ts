@@ -15,6 +15,8 @@ import type { WorkflowPersistence } from "../../src/controller/workflow-persiste
 
 const workspaces: string[] = [];
 const controllers: Array<{ stop(): Promise<void> }> = [];
+const workerPortBase = 50_000 + (Number.parseInt(process.env.VITEST_WORKER_ID ?? "0", 10) || 0) * 10;
+let nextControllerPort = 0;
 
 afterEach(async () => {
   await Promise.all(controllers.splice(0).map((controller) => controller.stop()));
@@ -25,7 +27,7 @@ describe("authenticated controller startup", () => {
   it("binds only the required loopback address and rejects unauthenticated requests", async () => {
     const controller = await runningController();
 
-    expect(controller.address).toEqual({ host: "127.0.0.1", port: 4317 });
+    expect(controller.address).toEqual({ host: "127.0.0.1", port: controller.port });
     expect(readFileSync(join(controller.projectRoot, ".opencode", "agents", "orca-orchestrator.md"), "utf8")).not.toMatch(/^model:/m);
     expect((await controller.api.inject({ method: "GET", url: "/health" })).statusCode).toBe(401);
     expect((await controller.api.inject({ method: "GET", url: "/health", headers: { authorization: `Bearer ${controller.token}` } })).json()).toMatchObject({ healthy: true, opencodeHealthy: true, bindingsCurrent: true, bindingCount: 5 });
@@ -125,10 +127,11 @@ async function runningController() {
   await setup.rosterService.pair();
   const controller = await startController(setup.options);
   controllers.push(controller);
-  return { ...controller, projectRoot: setup.projectRoot, options: setup.options };
+  return { ...controller, projectRoot: setup.projectRoot, options: setup.options, port: setup.port };
 }
 
 function controllerSetup() {
+  const port = workerPortBase + nextControllerPort++;
   const projectRoot = mkdtempSync(join(tmpdir(), "orca-controller-"));
   workspaces.push(projectRoot);
   mkdirSync(join(projectRoot, ".orca"));
@@ -138,7 +141,7 @@ function controllerSetup() {
   const adapter = new MutableAdapter(sessions);
   const persistence = new MemoryPersistence();
   const rosterService = new RosterService(adapter, persistence);
-  return { projectRoot, sessions, adapter, persistence, rosterService, options: { projectRoot, adapter, persistence, version: "0.1.0" } };
+  return { port, projectRoot, sessions, adapter, persistence, rosterService, options: { projectRoot, adapter, persistence, version: "0.1.0", port } };
 }
 
 class MemoryPersistence implements WorkflowPersistence {
