@@ -13,12 +13,12 @@ import {
 import type { BuilderResult, PlannerResult, ReviewerResult, RoleWorkerResult, TesterResult } from "../../src/domain/types.js";
 
 function base(role: RoleWorkerResult["role"]): RoleWorkerResult {
-  return {
-    schemaVersion: "1.0",
+  const result = {
+    schemaVersion: "1.0" as const,
     missionId: "mission-1",
     taskId: "task-1",
     role,
-    status: "completed",
+    status: "completed" as const,
     summary: "ok",
     workPerformed: [],
     files: [],
@@ -31,6 +31,18 @@ function base(role: RoleWorkerResult["role"]): RoleWorkerResult {
     sourceWorkspaceFingerprint: "fp",
     completedAt: "2026-01-01T00:00:00.000Z"
   };
+  switch (role) {
+    case "planner":
+      return { ...result, role: "planner", planVerdict: "ready", implementationSteps: ["step"], expectedFiles: [], validationPlan: [] };
+    case "builder":
+      return { ...result, role: "builder", implementationVerdict: "implemented", changedFiles: [], targetedTestsRun: [] };
+    case "reviewer":
+      return { ...result, role: "reviewer", reviewVerdict: "pass", reviewedWorkspaceFingerprint: "fp" };
+    case "tester":
+      return { ...result, role: "tester", testVerdict: "pass", testedWorkspaceFingerprint: "fp", requiredChecks: [], passedChecks: [], failedChecks: [] };
+    default:
+      throw new Error(`unexpected role ${role}`);
+  }
 }
 
 describe("evaluatePlannerResult", () => {

@@ -59,4 +59,13 @@ export interface WorkflowPersistence extends RosterPersistence {
   getGateAttempts(missionId: string, gate: string): Array<{ attempt: number; role: Exclude<Role, "orchestrator">; workspaceFingerprint: string | null; createdAt: string }>;
   getGateAttemptCount(missionId: string, gate: string): number;
   getCurrentApproval(missionId: string, gate: string): import("../persistence/sqlite.js").ApprovalRecord | null;
+  enqueueCheckIntent(input: { checkIntentId: string; missionId: string; checkName: string; executable: string; args: readonly string[]; timeoutMs: number; workingDirectory: string | null; env: Readonly<Record<string, string>>; configHash: string }): void;
+  claimNextCheckIntent(leaseOwner: string, leaseDurationMs: number, timestamp?: string): { checkIntentId: string; missionId: string; checkName: string; executable: string; args: string[]; timeoutMs: number; workingDirectory: string | null; env: Record<string, string>; configHash: string } | null;
+  completeCheckIntent(checkIntentId: string, status: "passed" | "failed" | "timed_out" | "spawn_error", exitCode: number | null, stdout: string, stderr: string, truncated: boolean, durationMs: number, timestamp?: string): void;
+  listCheckResults(missionId: string): Array<{ checkName: string; status: "passed" | "failed" | "timed_out" | "spawn_error"; exitCode: number | null; stdout: string; stderr: string; truncated: boolean; durationMs: number; capturedAt: string }>;
+  recordMissionConfiguration(missionId: string, configHash: string, timestamp?: string): void;
+  getMissionConfiguration(missionId: string): { configHash: string; recordedAt: string } | null;
+  recordPermissionRequest(input: { missionId: string; sessionId: string; toolName: string; details: Record<string, unknown>; timestamp?: string }): void;
+  resolvePermissionRequest(input: { missionId: string; sessionId: string; toolName: string; state: "granted" | "denied" | "expired"; timestamp?: string }): void;
+  getOpenPermissionRequests(missionId: string): Array<{ sessionId: string; toolName: string; capturedAt: string }>;
 }

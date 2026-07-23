@@ -575,6 +575,152 @@ export class SqlitePersistence {
     return { approvalId: row.approval_id, missionId: row.mission_id, taskId: row.task_id, decision: row.decision, reason: row.reason, createdAt: row.created_at };
   }
 
+  public enqueueCheckIntent(input: {
+    checkIntentId: string;
+    missionId: string;
+    checkName: string;
+    executable: string;
+    args: readonly string[];
+    timeoutMs: number;
+    workingDirectory: string | null;
+    env: Readonly<Record<string, string>>;
+    configHash: string;
+  }): void {
+    const timestamp = nowIso();
+    this.database.prepare(`
+      INSERT INTO controlled_check_intents (
+        check_intent_id, mission_id, check_name, executable, args_json, timeout_ms, working_directory, env_json, config_hash,
+        lease_owner, lease_expires_at, attempt, state, created_at, updated_at
+      ) VALUES (
+        @checkIntentId, @missionId, @checkName, @executable, @argsJson, @timeoutMs, @workingDirectory, @envJson, @configHash,
+        NULL, NULL, 0, 'pending', @timestamp, @timestamp
+      )
+      ON CONFLICT (check_intent_id) DO NOTHING
+    `).run({
+      checkIntentId: input.checkIntentId,
+      missionId: input.missionId,
+      checkName: input.checkName,
+      executable: input.executable,
+      argsJson: toJsonString(input.args),
+      timeoutMs: input.timeoutMs,
+      workingDirectory: input.workingDirectory,
+      envJson: toJsonString(input.env),
+      configHash: input.configHash,
+      timestamp
+    });
+  }
+
+  public claimNextCheckIntent(leaseOwner: string, leaseDurationMs: number, timestamp = nowIso()): {
+    checkIntentId: string;
+    missionId: string;
+    checkName: string;
+    executable: string;
+    args: string[];
+    timeoutMs: number;
+    workingDirectory: string | null;
+    env: Record<string, string>;
+    configHash: string;
+  } | null {
+    const claimTimestamp = normalizeTimestamp(timestamp);
+    const candidate = this.database.prepare(`
+      SELECT check_intent_id FROM controlled_check_intents
+      WHERE state IN ('pending', 'running') AND (lease_expires_at IS NULL OR julianday(lease_expires_at) <= julianday(@timestamp))
+      ORDER BY created_at ASC LIMIT 1
+    `).get({ timestamp: claimTimestamp }) as { check_intent_id: string } | undefined;
+    if (!candidate) return null;
+    const leaseExpiresAt = plusMilliseconds(claimTimestamp, leaseDurationMs);
+    const claim = this.database.prepare(`
+      UPDATE controlled_check_intents
+      SET state = 'running', lease_owner = @leaseOwner, lease_expires_at = @leaseExpiresAt, attempt = attempt + 1, updated_at = @timestamp
+      WHERE check_intent_id = @checkIntentId
+    `).run({ checkIntentId: candidate.check_intent_id, leaseOwner, leaseExpiresAt, timestamp: claimTimestamp });
+    if (claim.changes === 0) return null;
+    const row = this.database.prepare(`
+      SELECT check_intent_id, mission_id, check_name, executable, args_json, timeout_ms, working_directory, env_json, config_hash FROM controlled_check_intents WHERE check_intent_id = @checkIntentId
+    `).get({ checkIntentId: candidate.check_intent_id }) as { check_intent_id: string; mission_id: string; check_name: string; executable: string; args_json: string; timeout_ms: number; working_directory: string | null; env_json: string; config_hash: string };
+    return {
+      checkIntentId: row.check_intent_id,
+      missionId: row.mission_id,
+      checkName: row.check_name,
+      executable: row.executable,
+      args: parseJson<string[]>(row.args_json),
+      timeoutMs: row.timeout_ms,
+      workingDirectory: row.working_directory,
+      env: parseJson<Record<string, string>>(row.env_json),
+      configHash: row.config_hash
+    };
+  }
+
+  public completeCheckIntent(checkIntentId: string, status: "passed" | "failed" | "timed_out" | "spawn_error", exitCode: number | null, stdout: string, stderr: string, truncated: boolean, durationMs: number, timestamp = nowIso()): void {
+    this.runInTransaction(() => {
+      this.database.prepare(`
+        UPDATE controlled_check_intents
+        SET state = @status, lease_owner = NULL, lease_expires_at = NULL, updated_at = @timestamp
+        WHERE check_intent_id = @checkIntentId
+      `).run({ checkIntentId, status, timestamp });
+      const resultTs = nowIso();
+      this.database.prepare(`
+        INSERT OR REPLACE INTO controlled_check_results (check_intent_id, mission_id, exit_code, status, stdout, stderr, truncated, duration_ms, captured_at)
+        VALUES (@checkIntentId, (SELECT mission_id FROM controlled_check_intents WHERE check_intent_id = @checkIntentId), @exitCode, @status, @stdout, @stderr, @truncated, @durationMs, @resultTs)
+      `).run({ checkIntentId, exitCode, status, stdout, stderr, truncated: truncated ? 1 : 0, durationMs, resultTs });
+    });
+  }
+
+  public listCheckResults(missionId: string): Array<{ checkName: string; status: "passed" | "failed" | "timed_out" | "spawn_error"; exitCode: number | null; stdout: string; stderr: string; truncated: boolean; durationMs: number; capturedAt: string }> {
+    const rows = this.database.prepare(`
+      SELECT ci.check_name, cr.status, cr.exit_code, cr.stdout, cr.stderr, cr.truncated, cr.duration_ms, cr.captured_at
+      FROM controlled_check_results cr
+      JOIN controlled_check_intents ci ON ci.check_intent_id = cr.check_intent_id
+      WHERE cr.mission_id = @missionId
+      ORDER BY cr.captured_at ASC
+    `).all({ missionId }) as Array<{ check_name: string; status: "passed" | "failed" | "timed_out" | "spawn_error"; exit_code: number | null; stdout: string; stderr: string; truncated: number; duration_ms: number; captured_at: string }>;
+    return rows.map((row) => ({
+      checkName: row.check_name,
+      status: row.status,
+      exitCode: row.exit_code,
+      stdout: row.stdout,
+      stderr: row.stderr,
+      truncated: row.truncated === 1,
+      durationMs: row.duration_ms,
+      capturedAt: row.captured_at
+    }));
+  }
+
+  public recordMissionConfiguration(missionId: string, configHash: string, timestamp = nowIso()): void {
+    this.database.prepare(`
+      INSERT INTO mission_configurations (mission_id, config_hash, recorded_at) VALUES (@missionId, @configHash, @timestamp)
+      ON CONFLICT (mission_id) DO UPDATE SET config_hash = excluded.config_hash, recorded_at = excluded.recorded_at
+    `).run({ missionId, configHash, timestamp });
+  }
+
+  public getMissionConfiguration(missionId: string): { configHash: string; recordedAt: string } | null {
+    const row = this.database.prepare(`SELECT config_hash, recorded_at FROM mission_configurations WHERE mission_id = @missionId`).get({ missionId }) as { config_hash: string; recorded_at: string } | undefined;
+    if (!row) return null;
+    return { configHash: row.config_hash, recordedAt: row.recorded_at };
+  }
+
+  public recordPermissionRequest(input: { missionId: string; sessionId: string; toolName: string; details: Record<string, JsonLike>; timestamp?: string }): void {
+    const ts = input.timestamp ?? nowIso();
+    this.database.prepare(`
+      INSERT INTO permission_requests (mission_id, session_id, tool_name, details_json, state, captured_at)
+      VALUES (@missionId, @sessionId, @toolName, @detailsJson, 'open', @capturedAt)
+    `).run({ missionId: input.missionId, sessionId: input.sessionId, toolName: input.toolName, detailsJson: toJsonString(input.details), capturedAt: ts });
+  }
+
+  public resolvePermissionRequest(input: { missionId: string; sessionId: string; toolName: string; state: "granted" | "denied" | "expired"; timestamp?: string }): void {
+    const ts = input.timestamp ?? nowIso();
+    this.database.prepare(`
+      UPDATE permission_requests SET state = @state, resolved_at = @timestamp WHERE mission_id = @missionId AND session_id = @sessionId AND tool_name = @toolName AND state = 'open'
+    `).run({ missionId: input.missionId, sessionId: input.sessionId, toolName: input.toolName, state: input.state, timestamp: ts });
+  }
+
+  public getOpenPermissionRequests(missionId: string): Array<{ sessionId: string; toolName: string; capturedAt: string }> {
+    const rows = this.database.prepare(`
+      SELECT session_id, tool_name, captured_at FROM permission_requests WHERE mission_id = @missionId AND state = 'open' ORDER BY captured_at ASC
+    `).all({ missionId }) as Array<{ session_id: string; tool_name: string; captured_at: string }>;
+    return rows.map((row) => ({ sessionId: row.session_id, toolName: row.tool_name, capturedAt: row.captured_at }));
+  }
+
   public blockTaskExecution(taskId: string, reason: string): void {
     this.runInTransaction(() => {
       const task = this.getTaskExecution(taskId);
@@ -847,7 +993,8 @@ export class SqlitePersistence {
       { version: 5, sql: completionHardeningSchemaSql },
       { version: 6, sql: orchestratorActionsSchemaSql },
       { version: 7, sql: dispatchContractSchemaSql },
-      { version: 8, sql: gateQualitySchemaSql }
+      { version: 8, sql: gateQualitySchemaSql },
+      { version: 9, sql: controlledChecksSchemaSql }
     ];
     for (const migration of migrations) {
       if (applied.has(migration.version)) continue;
@@ -1167,4 +1314,60 @@ const gateQualitySchemaSql = `
     ON orchestrator_approvals (mission_id, gate) WHERE superseded_at IS NULL;
   ALTER TABLE tasks ADD COLUMN workspace_fingerprint_at_dispatch TEXT;
   ALTER TABLE tasks ADD COLUMN source_workspace_fingerprint TEXT;
+`;
+
+const controlledChecksSchemaSql = `
+  CREATE TABLE IF NOT EXISTS controlled_check_intents (
+    check_intent_id TEXT PRIMARY KEY,
+    mission_id TEXT NOT NULL,
+    check_name TEXT NOT NULL,
+    executable TEXT NOT NULL,
+    args_json TEXT NOT NULL,
+    timeout_ms INTEGER NOT NULL,
+    working_directory TEXT,
+    env_json TEXT NOT NULL DEFAULT '{}',
+    config_hash TEXT NOT NULL,
+    lease_owner TEXT,
+    lease_expires_at TEXT,
+    attempt INTEGER NOT NULL DEFAULT 0,
+    state TEXT NOT NULL CHECK (state IN ('pending', 'running', 'passed', 'failed', 'timed_out', 'spawn_error')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (mission_id) REFERENCES missions (mission_id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_controlled_check_intents_mission ON controlled_check_intents (mission_id);
+  CREATE INDEX IF NOT EXISTS idx_controlled_check_intents_claimable
+    ON controlled_check_intents (state, lease_expires_at);
+  CREATE TABLE IF NOT EXISTS controlled_check_results (
+    check_intent_id TEXT PRIMARY KEY,
+    mission_id TEXT NOT NULL,
+    exit_code INTEGER,
+    status TEXT NOT NULL CHECK (status IN ('passed', 'failed', 'timed_out', 'spawn_error')),
+    stdout TEXT NOT NULL,
+    stderr TEXT NOT NULL,
+    truncated INTEGER NOT NULL DEFAULT 0,
+    duration_ms INTEGER NOT NULL,
+    captured_at TEXT NOT NULL,
+    FOREIGN KEY (check_intent_id) REFERENCES controlled_check_intents (check_intent_id) ON DELETE CASCADE,
+    FOREIGN KEY (mission_id) REFERENCES missions (mission_id) ON DELETE CASCADE
+  );
+  CREATE TABLE IF NOT EXISTS mission_configurations (
+    mission_id TEXT NOT NULL,
+    config_hash TEXT NOT NULL,
+    recorded_at TEXT NOT NULL,
+    PRIMARY KEY (mission_id),
+    FOREIGN KEY (mission_id) REFERENCES missions (mission_id) ON DELETE CASCADE
+  );
+  CREATE TABLE IF NOT EXISTS permission_requests (
+    mission_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    tool_name TEXT NOT NULL,
+    details_json TEXT NOT NULL DEFAULT '{}',
+    state TEXT NOT NULL CHECK (state IN ('open', 'granted', 'denied', 'expired')),
+    captured_at TEXT NOT NULL,
+    resolved_at TEXT,
+    PRIMARY KEY (mission_id, session_id, tool_name, captured_at),
+    FOREIGN KEY (mission_id) REFERENCES missions (mission_id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_permission_requests_mission_state ON permission_requests (mission_id, state);
 `;
