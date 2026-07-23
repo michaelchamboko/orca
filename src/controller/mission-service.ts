@@ -23,6 +23,8 @@ export interface MissionTransitionInput {
   missionId: string;
   nextState: MissionState;
   failureReason?: string;
+  expectedState?: MissionState;
+  expectedVersion?: number;
 }
 
 export interface MissionTransitionResult {
@@ -34,6 +36,7 @@ export interface MissionTransitionResult {
   supersededApprovalCount: number;
   pendingDispatchKey: string | null;
   taskCreated: { taskId: string; role: Role; envelope: TaskEnvelope; targetSessionId: string; capturedModel: ModelRef; promptMessageId: string; dispatchKey: string } | null;
+  stateVersion: number;
 }
 
 export interface MissionActionContext {
@@ -106,9 +109,16 @@ export class MissionService {
       const mission = this.persistence.getMission(input.missionId);
       if (!mission) throw new Error(`mission not found: ${input.missionId}`);
       const previousState = mission.state;
+      if (input.expectedState !== undefined && input.expectedState !== previousState) {
+        throw new Error(`stale mission transition: expected ${input.expectedState}, found ${previousState}`);
+      }
+      const currentVersion = this.persistence.getMissionStateVersion(input.missionId);
+      if (input.expectedVersion !== undefined && input.expectedVersion !== currentVersion) {
+        throw new Error(`stale mission transition: expected version ${input.expectedVersion}, found ${currentVersion}`);
+      }
       const appliedAt = new Date().toISOString();
-      this.persistence.saveMission(input.missionId, input.nextState, { ...(mission.payload ?? {}), failureReason: input.failureReason ?? null });
-      this.persistence.recordMissionEvent(input.missionId, null, "mission.transition", { from: previousState, to: input.nextState, reason: input.failureReason ?? null });
+      const newVersion = this.persistence.casMission(input.missionId, currentVersion, input.nextState, { ...(mission.payload ?? {}), failureReason: input.failureReason ?? null });
+      this.persistence.recordMissionEvent(input.missionId, null, "mission.transition", { from: previousState, to: input.nextState, reason: input.failureReason ?? null, stateVersion: newVersion });
 
       let consumedTaskId: string | null = null;
       let supersededApprovalCount = 0;
@@ -140,9 +150,7 @@ export class MissionService {
       }
 
       if (isTerminalState(input.nextState) && previousState !== input.nextState) {
-        this.persistence.runInTransaction(() => {
-          this.persistence.recordMissionEvent(input.missionId, null, "mission.terminal", { state: input.nextState, reason: input.failureReason ?? null });
-        });
+        this.persistence.recordMissionEvent(input.missionId, null, "mission.terminal", { state: input.nextState, reason: input.failureReason ?? null, stateVersion: newVersion });
       }
 
       void appliedAt;
@@ -154,7 +162,8 @@ export class MissionService {
         consumedTaskId,
         supersededApprovalCount,
         pendingDispatchKey,
-        taskCreated
+        taskCreated,
+        stateVersion: newVersion
       };
     });
   }
@@ -175,12 +184,13 @@ export class MissionService {
     const taskIdForApproval: string | undefined = action.taskId && this.persistence.getTask(action.taskId) ? action.taskId : undefined;
 
     if (action.action === "approve") {
-      this.persistence.runInTransaction(() => {
+      const previousState = this.persistence.runInTransaction(() => {
         this.persistence.recordApproval({ approvalId: randomUUID(), missionId: action.missionId, taskId: taskIdForApproval, decision: "approved", reason: action.rationale });
         this.persistence.recordMissionEvent(action.missionId, taskIdForApproval ?? null, "approval.recorded", { decision: "approved", sourceMessageId });
+        return this.persistence.getMission(action.missionId)?.state ?? currentState;
       });
-      const nextState = nextStateForApproval(currentState);
-      this.transitionMission({ missionId: action.missionId, nextState });
+      const nextState = nextStateForApproval(previousState);
+      this.transitionMission({ missionId: action.missionId, nextState, expectedState: previousState });
       return { applied: true, superseded: false, missionBlocked: false };
     }
 

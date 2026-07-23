@@ -247,12 +247,20 @@ export class SqlitePersistence {
   /** Creates metadata for a mission while the partial index permits only one active mission per roster. */
   public createMission(input: CreateMissionInput): MissionDataRecord {
     return this.runInTransaction(() => {
-      this.saveMission(input.missionId, input.state, input.payload ?? { objective: input.objective });
+      const timestamp = nowIso();
+      this.database.prepare(`
+        INSERT INTO missions (mission_id, state, payload, state_version, created_at, updated_at)
+        VALUES (@missionId, @state, @payload, 0, @timestamp, @timestamp)
+        ON CONFLICT (mission_id) DO UPDATE SET
+          state = excluded.state,
+          payload = excluded.payload,
+          updated_at = excluded.updated_at
+      `).run({ missionId: input.missionId, state: input.state, payload: toJsonString(input.payload ?? { objective: input.objective }), timestamp });
       this.database.prepare(`
         INSERT INTO mission_metadata (
-          mission_id, roster_id, objective, source_session_message_id, state, failure_reason
+          mission_id, roster_id, objective, source_session_message_id, state, failure_reason, state_version
         ) VALUES (
-          @missionId, @rosterId, @objective, @sourceSessionMessageId, @state, @failureReason
+          @missionId, @rosterId, @objective, @sourceSessionMessageId, @state, @failureReason, 0
         )
       `).run({ ...input, failureReason: input.failureReason ?? null });
       const mission = this.getMission(input.missionId);
@@ -261,20 +269,61 @@ export class SqlitePersistence {
     });
   }
 
-  public saveMission(missionId: string, state: MissionState, payload: Record<string, JsonLike>): void {
+  public saveMission(missionId: string, state: MissionState, payload: Record<string, JsonLike>, expectedVersion?: number): void {
     this.runInTransaction(() => {
       const timestamp = nowIso();
+      const currentVersion = this.getMissionStateVersion(missionId);
+      if (expectedVersion !== undefined && expectedVersion !== currentVersion) {
+        throw new Error(`mission state version mismatch: expected ${expectedVersion}, found ${currentVersion}`);
+      }
+      const nextVersion = currentVersion + 1;
+      const updateInfo = this.database.prepare(`
+        UPDATE mission_metadata SET state = @state, state_version = @stateVersion WHERE mission_id = @missionId
+      `).run({ missionId, state, stateVersion: nextVersion });
+      if (updateInfo.changes === 0) throw new Error(`mission metadata not found: ${missionId}`);
       this.database.prepare(`
-        INSERT INTO missions (mission_id, state, payload, created_at, updated_at)
-        VALUES (@missionId, @state, @payload, @timestamp, @timestamp)
+        INSERT INTO missions (mission_id, state, payload, state_version, created_at, updated_at)
+        VALUES (@missionId, @state, @payload, @stateVersion, @timestamp, @timestamp)
         ON CONFLICT (mission_id) DO UPDATE SET
           state = excluded.state,
           payload = excluded.payload,
+          state_version = excluded.state_version,
           updated_at = excluded.updated_at
-      `).run({ missionId, state, payload: toJsonString(payload), timestamp });
-      this.database.prepare(`UPDATE mission_metadata SET state = @state WHERE mission_id = @missionId`)
-        .run({ missionId, state });
+      `).run({ missionId, state, payload: toJsonString(payload), stateVersion: nextVersion, timestamp });
     });
+  }
+
+  /**
+   * Atomic mission transition with compare-and-set on the state version.
+   * Returns the new version, or throws if the expected version does not match.
+   */
+  public casMission(missionId: string, expectedVersion: number, state: MissionState, payload: Record<string, JsonLike>): number {
+    return this.runInTransaction(() => {
+      const currentVersion = this.getMissionStateVersion(missionId);
+      if (expectedVersion !== currentVersion) {
+        throw new Error(`mission state version mismatch: expected ${expectedVersion}, found ${currentVersion}`);
+      }
+      const timestamp = nowIso();
+      const nextVersion = currentVersion + 1;
+      this.database.prepare(`
+        UPDATE mission_metadata SET state = @state, state_version = @stateVersion WHERE mission_id = @missionId
+      `).run({ missionId, state, stateVersion: nextVersion });
+      this.database.prepare(`
+        INSERT INTO missions (mission_id, state, payload, state_version, created_at, updated_at)
+        VALUES (@missionId, @state, @payload, @stateVersion, @timestamp, @timestamp)
+        ON CONFLICT (mission_id) DO UPDATE SET
+          state = excluded.state,
+          payload = excluded.payload,
+          state_version = excluded.state_version,
+          updated_at = excluded.updated_at
+      `).run({ missionId, state, payload: toJsonString(payload), stateVersion: nextVersion, timestamp });
+      return nextVersion;
+    });
+  }
+
+  public getMissionStateVersion(missionId: string): number {
+    const row = this.database.prepare(`SELECT state_version FROM mission_metadata WHERE mission_id = @missionId`).get({ missionId }) as { state_version: number | null } | undefined;
+    return row?.state_version ?? 0;
   }
 
   public getMission(missionId: string): MissionDataRecord | null {
@@ -1151,8 +1200,10 @@ const liveWorkflowSchemaSql = `
     source_session_message_id TEXT NOT NULL,
     state TEXT NOT NULL,
     failure_reason TEXT,
+    state_version INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY (mission_id) REFERENCES missions (mission_id) ON DELETE CASCADE
   );
+  ALTER TABLE missions ADD COLUMN state_version INTEGER NOT NULL DEFAULT 0;
   CREATE UNIQUE INDEX IF NOT EXISTS idx_mission_metadata_active_roster
     ON mission_metadata (roster_id)
     WHERE roster_id IS NOT NULL AND state NOT IN (${activeMissionStatesSql});

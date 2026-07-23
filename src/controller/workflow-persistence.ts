@@ -17,7 +17,9 @@ export interface WorkflowPersistence extends RosterPersistence {
   };
   saveTaskExecution(input: import("../persistence/sqlite.js").TaskExecutionInput): void;
   getTask(taskId: string): import("../persistence/sqlite.js").PersistedTask | null;
-  saveMission(missionId: string, state: import("../domain/types.js").MissionState, payload: Record<string, unknown>): void;
+  saveMission(missionId: string, state: import("../domain/types.js").MissionState, payload: Record<string, unknown>, expectedVersion?: number): void;
+  casMission(missionId: string, expectedVersion: number, state: import("../domain/types.js").MissionState, payload: Record<string, unknown>): number;
+  getMissionStateVersion(missionId: string): number;
   recordApproval(input: import("../persistence/sqlite.js").ApprovalInput): import("../persistence/sqlite.js").ApprovalRecord;
   recordProcessedMessage(input: ProcessedMessageInput): boolean;
   claimNextDispatch(leaseOwner: string, leaseDurationMs: number, timestamp?: string): DispatchOutboxAction | null;
