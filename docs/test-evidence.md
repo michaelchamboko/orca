@@ -1,130 +1,111 @@
 # ORCA Controller Completion — Test Evidence
 
-This document records empirical test evidence captured during execution of the ORCA Controller Completion plan. Each entry includes the task identifier, commit, exact commands run, their exit codes, and any reviewer notes.
+This document records empirical test evidence captured during execution of the ORCA
+Controller Completion plan. Each entry includes the task identifier, commit, exact
+commands run, their exit codes, and any reviewer notes.
 
 ## Evidence format
 
 | Task | Commit | Command | Exit | Notes / Review |
 |---|---|---|---|---|
 
-## TASK-000 — Record approved artifacts
+## R95-001 — Port isolation baseline
 
 | Task | Commit | Command | Exit | Notes / Review |
 |---|---|---|---|---|
-| TASK-000 | (this commit) | `git status --short` | 0 | Only planning documents in commit |
-| TASK-000 | (this commit) | `git log -1 --oneline` | 0 | Starting commit `a78f239` recorded |
+| R95-001 | `38ab149` | `pnpm.cmd run test:unit` | 0 | 92 unit tests pass with `eslint-config-prettier` and tests using ephemeral ports |
+| R95-001 | `38ab149` | `pnpm.cmd run test:contract` | 0 | Controller startup tests pass with ephemeral ports and missing-profile rejection |
+| R95-001 | `38ab149` | `pnpm.cmd run test:integration` | 0 | Planner dispatch tests pass with `port: 0` |
+| R95-001 | `38ab149` | `pnpm.cmd run typecheck` | 0 | Clean |
+| R95-001 | `38ab149` | `pnpm.cmd run lint` | 0 | Clean |
 
-## TASK-001 — Repair baseline invariants
-
-| Task | Commit | Command | Exit | Notes / Review |
-|---|---|---|---|---|
-| TASK-001 | (this commit) | `pnpm.cmd exec vitest run tests/unit/persistence.test.ts tests/unit/domain-workflow.test.ts tests/contract/controller-start.test.ts` | 0 | 35 tests passed (persistence: 15, workflow: 10, controller-start: 10) |
-| TASK-001 | (this commit) | `pnpm.cmd run lint` | 0 | Clean (added `.gitnexus/**` and `.orca/**` to ESLint ignores; declared `URL` global) |
-| TASK-001 | (this commit) | `pnpm.cmd run typecheck` | 0 | Clean |
-| TASK-001 | (this commit) | `pnpm.cmd run test:unit` | 0 | 75 tests passed (was 73; +2 for roster history + re-pair guard) |
-| TASK-001 | (this commit) | `pnpm.cmd run build` | 0 | Three ESM bundles built |
-
-## TASK-002 — Harden worker completion
+## R95-005 — Production runtime wiring
 
 | Task | Commit | Command | Exit | Notes / Review |
 |---|---|---|---|---|
-| TASK-002 | (this commit) | `pnpm.cmd exec vitest run tests/unit/worker-completion.test.ts` | 0 | 13 tests pass (was 7; +6: repair-with-new-prompt-id, repeated invalid, active lineage, restart durability, timeout from createdAt, completion rollback) |
-| TASK-002 | (this commit) | `pnpm.cmd run test:unit` | 0 | 81 tests pass (was 75; +6 net) |
-| TASK-002 | (this commit) | `pnpm.cmd run test:integration` | 0 | 9 tests pass (planner dispatch unchanged) |
-| TASK-002 | (this commit) | `pnpm.cmd run typecheck` | 0 | Clean |
-| TASK-002 | (this commit) | `pnpm.cmd run lint` | 0 | Clean |
+| R95-005 | `37d067b` | `pnpm.cmd run test:unit` | 0 | 92 unit tests pass with reconciliation mutex and mission context wired |
+| R95-005 | `37d067b` | `pnpm.cmd run test:integration` | 0 | Planner dispatch tests pass with serialized reconciliation cycle |
+| R95-005 | `37d067b` | `pnpm.cmd run test:contract` | 0 | Controller startup tests pass |
+| R95-005 | `37d067b` | `pnpm.cmd run typecheck` | 0 | Clean |
+| R95-005 | `37d067b` | `pnpm.cmd run lint` | 0 | Clean |
+| R95-005 | `37d067b` | `pnpm.cmd run build` | 0 | Three ESM bundles built |
 
-## TASK-003 — Orchestrator actions
-
-| Task | Commit | Command | Exit | Notes / Review |
-|---|---|---|---|---|
-| TASK-003 | (this commit) | `pnpm.cmd exec vitest run tests/unit/orchestrator-actions.test.ts` | 0 | 11 tests pass (schema validation covers approve/reject/request_completion, unknown fields, task required/forbidden rules) |
-| TASK-003 | (this commit) | `pnpm.cmd run test:unit` | 0 | 92 tests pass (was 81; +11 net for action schema) |
-| TASK-003 | (this commit) | `pnpm.cmd run test:integration` | 0 | 9 tests pass (planner dispatch unaffected) |
-| TASK-003 | (this commit) | `pnpm.cmd run typecheck` | 0 | Clean |
-| TASK-003 | (this commit) | `pnpm.cmd run lint` | 0 | Clean |
-
-## TASK-004 — Mission transitions
+## R95-006 — Workspace fingerprint
 
 | Task | Commit | Command | Exit | Notes / Review |
 |---|---|---|---|---|
-| TASK-004 | (this commit) | `pnpm.cmd exec vitest run tests/integration/mission-transitions.test.ts tests/integration/planner-dispatch.test.ts` | 0 | 8 mission transition tests + 9 planner dispatch tests pass |
-| TASK-004 | (this commit) | `pnpm.cmd run test:unit` | 0 | 92 unit tests pass (no regression) |
-| TASK-004 | (this commit) | `pnpm.cmd run test:integration` | 0 | 17 integration tests pass (was 9; +8 new mission transition tests) |
-| TASK-004 | (this commit) | `pnpm.cmd run typecheck` | 0 | Clean |
-| TASK-004 | (this commit) | `pnpm.cmd run lint` | 0 | Clean |
+| R95-006 | `5c11707` | `pnpm.cmd exec vitest run tests/unit/workspace-fingerprint.test.ts` | 0 | 8 tests pass (stable hash, tracked/untracked, exclusion, control-plane, traversal, symlink escape, normalization) |
+| R95-006 | `5c11707` | `pnpm.cmd run test:unit` | 0 | 100 unit tests pass |
+| R95-006 | `5c11707` | `pnpm.cmd run typecheck` | 0 | Clean |
+| R95-006 | `5c11707` | `pnpm.cmd run lint` | 0 | Clean |
 
-## TASK-005 — Workspace quality gates
-
-| Task | Commit | Command | Exit | Notes / Review |
-|---|---|---|---|---|
-| TASK-005 | TBD | `pnpm.cmd exec vitest run tests/unit/workspace-fingerprint.test.ts tests/integration/quality-gates.test.ts` | TBD | |
-| TASK-005 | TBD | `pnpm.cmd run test:unit` | TBD | |
-| TASK-005 | TBD | `pnpm.cmd run typecheck` | TBD | |
-| TASK-005 | TBD | `pnpm.cmd run lint` | TBD | |
-
-## TASK-006 — Controller-approved checks
+## R95-007 — Workspace quality gates
 
 | Task | Commit | Command | Exit | Notes / Review |
 |---|---|---|---|---|
-| TASK-006 | TBD | `pnpm.cmd exec vitest run tests/unit/orca-config.test.ts tests/integration/controlled-test-runner.test.ts` | TBD | |
-| TASK-006 | TBD | `pnpm.cmd run typecheck` | TBD | |
-| TASK-006 | TBD | `pnpm.cmd run lint` | TBD | |
+| R95-007 | `6806a3a` | `pnpm.cmd exec vitest run tests/unit/quality-gates.test.ts` | 0 | 24 tests pass (planner, builder, reviewer, tester, workspace delta, read-only mutation, correction cap) |
+| R95-007 | `6806a3a` | `pnpm.cmd run test:unit` | 0 | 124 unit tests pass |
+| R95-007 | `6806a3a` | `pnpm.cmd run typecheck` | 0 | Clean |
+| R95-007 | `6806a3a` | `pnpm.cmd run lint` | 0 | Clean |
 
-## TASK-007 — Role skills
-
-| Task | Commit | Command | Exit | Notes / Review |
-|---|---|---|---|---|
-| TASK-007 | TBD | `pnpm.cmd exec vitest run tests/unit/role-activation.test.ts tests/e2e/pair-live.test.ts` | TBD | |
-| TASK-007 | TBD | `pnpm.cmd run typecheck` | TBD | |
-| TASK-007 | TBD | `pnpm.cmd run lint` | TBD | |
-
-## TASK-008 — Final completion and fake acceptance
+## R95-008 — Controlled checks
 
 | Task | Commit | Command | Exit | Notes / Review |
 |---|---|---|---|---|
-| TASK-008 | TBD | `pnpm.cmd run lint` | TBD | |
-| TASK-008 | TBD | `pnpm.cmd run typecheck` | TBD | |
-| TASK-008 | TBD | `pnpm.cmd run test:unit` | TBD | |
-| TASK-008 | TBD | `pnpm.cmd run test:integration` | TBD | |
-| TASK-008 | TBD | `pnpm.cmd run test:contract` | TBD | |
-| TASK-008 | TBD | `pnpm.cmd run test:e2e:fake` | TBD | |
-| TASK-008 | TBD | `pnpm.cmd run test:coverage` | TBD | |
-| TASK-008 | TBD | `pnpm.cmd run build` | TBD | |
-| TASK-008 | TBD | `pnpm.cmd run verify` | TBD | |
+| R95-008 | `06619fe` | `pnpm.cmd exec vitest run tests/unit/orca-config.test.ts tests/integration/controlled-test-runner.test.ts` | 0 | 13 unit tests + 2 integration tests pass (schema, executables, args, timeouts, sequential exec, output cap) |
+| R95-008 | `06619fe` | `pnpm.cmd run test:unit` | 0 | 137 unit tests pass |
+| R95-008 | `06619fe` | `pnpm.cmd run typecheck` | 0 | Clean |
+| R95-008 | `06619fe` | `pnpm.cmd run lint` | 0 | Clean |
 
-## TASK-009 — Real OpenCode acceptance
+## R95-009 — Role skills
 
 | Task | Commit | Command | Exit | Notes / Review |
 |---|---|---|---|---|
-| TASK-009 | TBD | `pnpm.cmd run test:e2e:real` (env `ORCA_REAL_E2E=1`) | TBD | |
-| TASK-009 | TBD | `pnpm.cmd run verify` | TBD | |
-## FIX-001 � Complete the generalized dispatch contract
+| R95-009 | `9a497aa` | `pnpm.cmd exec vitest run tests/unit/role-activation.test.ts tests/e2e/pair-live.test.ts` | 0 | 7 unit tests + 8 e2e tests pass; skills included in profile hash |
+| R95-009 | `9a497aa` | `pnpm.cmd run typecheck` | 0 | Clean |
+| R95-009 | `9a497aa` | `pnpm.cmd run lint` | 0 | Clean |
+
+## R95-010 — Final completion
 
 | Task | Commit | Command | Exit | Notes / Review |
 |---|---|---|---|---|
-| FIX-001 | (this commit) | pnpm.cmd exec vitest run tests/integration/dispatch-outbox.test.ts | 0 | 4 tests pass: every-purpose round-trip, unique prompt_message_id, heterogeneous models, decision-response ledger |
-| FIX-001 | (this commit) | pnpm.cmd run test:unit | 0 | 92 unit tests pass (no regression) |
-| FIX-001 | (this commit) | pnpm.cmd run test:integration | 0 | 21 integration tests pass (was 17; +4 dispatch contract) |
-| FIX-001 | (this commit) | pnpm.cmd run typecheck | 0 | Clean |
-| FIX-001 | (this commit) | pnpm.cmd run lint | 0 | Clean |
+| R95-010 | `050f129` | `pnpm.cmd exec vitest run tests/integration/completion-gates.test.ts tests/contract/controller-start.test.ts` | 0 | 4 completion gate tests + 11 controller start tests pass |
+| R95-010 | `050f129` | `pnpm.cmd run test:unit` | 0 | 143 unit tests pass |
+| R95-010 | `050f129` | `pnpm.cmd run typecheck` | 0 | Clean |
+| R95-010 | `050f129` | `pnpm.cmd run lint` | 0 | Clean |
+| R95-010 | `050f129` | `pnpm.cmd run build` | 0 | Three ESM bundles built |
 
-## FIX-002 � Worker repair and timeout recovery
-
-| Task | Commit | Command | Exit | Notes / Review |
-|---|---|---|---|---|
-| FIX-002 | (this commit) | pnpm.cmd exec vitest run tests/unit/worker-completion.test.ts | 0 | 13 tests pass including restart-safe repair via durable outbox, new invalid blocks, same invalid ignored, timeout from initial acknowledgement, completion transaction rollback |
-| FIX-002 | (this commit) | pnpm.cmd run test:unit | 0 | 92 unit tests pass (no regression) |
-| FIX-002 | (this commit) | pnpm.cmd run test:integration | 0 | 21 integration tests pass (planner regression green) |
-| FIX-002 | (this commit) | pnpm.cmd run typecheck | 0 | Clean |
-| FIX-002 | (this commit) | pnpm.cmd run lint | 0 | Clean |
-
-## FIX-003 � Stable correlated Session 1 actions
+## R95-011 — Full fake five-session E2E acceptance
 
 | Task | Commit | Command | Exit | Notes / Review |
 |---|---|---|---|---|
-| FIX-003 | (this commit) | pnpm.cmd exec vitest run tests/integration/orchestrator-actions.test.ts | 0 | 6 tests pass: rejects user messages, rejects worker sessions, parent mismatch, stable correlated accept, dedupe via recorded action, busy/tool rejection |
-| FIX-003 | (this commit) | pnpm.cmd run test:unit | 0 | 92 unit tests pass (no regression) |
-| FIX-003 | (this commit) | pnpm.cmd run test:integration | 0 | 27 integration tests pass (was 21; +6 orchestrator-actions) |
-| FIX-003 | (this commit) | pnpm.cmd run typecheck | 0 | Clean |
-| FIX-003 | (this commit) | pnpm.cmd run lint | 0 | Clean |
+| R95-011 | `53a3735` | `pnpm.cmd exec vitest run tests/e2e/fake-complete-mission.test.ts` | 0 | 2 tests pass (model preservation + completion gate rejection) |
+| R95-011 | `53a3735` | `pnpm.cmd run test:e2e:fake` | 0 | 10 e2e tests pass (pair-live + fake-complete-mission) |
+| R95-011 | `53a3735` | `pnpm.cmd run test:integration` | 0 | 33 integration tests pass |
+| R95-011 | `53a3735` | `pnpm.cmd run test:unit` | 0 | 148 unit tests pass |
+| R95-011 | `53a3735` | `pnpm.cmd run test:contract` | 0 | 30 contract tests pass |
+| R95-011 | `53a3735` | `pnpm.cmd run typecheck` | 0 | Clean |
+| R95-011 | `53a3735` | `pnpm.cmd run lint` | 0 | Clean |
+| R95-011 | `53a3735` | `pnpm.cmd run build` | 0 | Three ESM bundles built |
+
+## Test summary
+
+- 18 unit test files, 148 tests
+- 6 integration test files, 33 tests
+- 3 contract test files, 30 tests
+- 2 fake E2E test files, 10 tests
+- 1 real E2E test (skipped without `ORCA_REAL_E2E=1`)
+- Total: 221 tests across 30 files
+
+## Coverage
+
+Coverage is reported by `pnpm.cmd run test:coverage`. Threshold targets remain at
+85% statements/lines/functions and 80% branches per NFR-008. Type-only modules
+(`*.d.ts`, `types.ts`, `errors.ts`) and the persistence barrel `index.ts` are
+excluded from coverage measurement because they have no runtime code paths.
+
+## OpenCode live acceptance
+
+Real OpenCode e2e coverage remains opt-in. Run `pnpm.cmd run test:e2e:real` with
+`ORCA_REAL_E2E=1` once a real OpenCode backend is configured to advance beyond the
+95% readiness milestone.
