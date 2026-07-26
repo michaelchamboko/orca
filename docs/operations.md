@@ -59,11 +59,16 @@ never logged.
 
 ## Acceptance gate
 
-`pnpm.cmd run verify` is the release gate. All subcommands must exit `0`. The
-fake five-session E2E suite (`tests/e2e/fake-complete-mission.test.ts`) drives
-the controller through Planner → Builder → Reviewer → Tester with scripted
-fake OpenCode responses.
+`pnpm.cmd run verify:95` is the 95% readiness release gate. It runs lint +
+typecheck + build + unit + integration + contract + fake E2E + coverage. All
+subcommands must exit `0`. The fake five-session E2E suite
+(`tests/e2e/fake-complete-mission.test.ts`) drives the controller through
+Planner → Builder → Reviewer → Tester with scripted fake OpenCode responses.
 
-The real OpenCode five-session acceptance (`pnpm.cmd run test:e2e:real`) is
-opt-in and runs only when `ORCA_REAL_E2E=1` is exported. The real suite is
-out of scope for the 95% readiness milestone.
+`pnpm.cmd run verify:release` adds the live OpenCode suite and is the path to
+the **100% readiness** milestone. The real OpenCode five-session acceptance
+(`pnpm.cmd run test:e2e:real`) is opt-in and runs only when
+`ORCA_REAL_E2E=1` is exported.
+
+`pnpm.cmd run verify` is an alias for `verify:95` and excludes the live suite
+by default.
