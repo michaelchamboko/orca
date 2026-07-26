@@ -272,15 +272,14 @@ export class SqlitePersistence {
   public saveMission(missionId: string, state: MissionState, payload: Record<string, JsonLike>, expectedVersion?: number): void {
     this.runInTransaction(() => {
       const timestamp = nowIso();
-      const currentVersion = this.getMissionStateVersion(missionId);
+      const existing = this.database.prepare(`
+        SELECT state_version, roster_id FROM mission_metadata WHERE mission_id = @missionId
+      `).get({ missionId }) as { state_version: number; roster_id: string | null } | undefined;
+      const currentVersion = existing?.state_version ?? 0;
       if (expectedVersion !== undefined && expectedVersion !== currentVersion) {
         throw new Error(`mission state version mismatch: expected ${expectedVersion}, found ${currentVersion}`);
       }
       const nextVersion = currentVersion + 1;
-      const updateInfo = this.database.prepare(`
-        UPDATE mission_metadata SET state = @state, state_version = @stateVersion WHERE mission_id = @missionId
-      `).run({ missionId, state, stateVersion: nextVersion });
-      if (updateInfo.changes === 0) throw new Error(`mission metadata not found: ${missionId}`);
       this.database.prepare(`
         INSERT INTO missions (mission_id, state, payload, state_version, created_at, updated_at)
         VALUES (@missionId, @state, @payload, @stateVersion, @timestamp, @timestamp)
@@ -290,6 +289,20 @@ export class SqlitePersistence {
           state_version = excluded.state_version,
           updated_at = excluded.updated_at
       `).run({ missionId, state, payload: toJsonString(payload), stateVersion: nextVersion, timestamp });
+      if (existing) {
+        this.database.prepare(`
+          UPDATE mission_metadata SET state = @state, state_version = @stateVersion WHERE mission_id = @missionId
+        `).run({ missionId, state, stateVersion: nextVersion });
+      } else {
+        const objective = typeof payload.objective === "string" ? payload.objective : "";
+        const sourceSessionMessageId = typeof payload.source_session_message_id === "string"
+          ? payload.source_session_message_id
+          : "";
+        this.database.prepare(`
+          INSERT INTO mission_metadata (mission_id, roster_id, objective, source_session_message_id, state, failure_reason, state_version)
+          VALUES (@missionId, NULL, @objective, @sourceSessionMessageId, @state, NULL, @stateVersion)
+        `).run({ missionId, objective, sourceSessionMessageId, state, stateVersion: nextVersion });
+      }
     });
   }
 
@@ -299,15 +312,15 @@ export class SqlitePersistence {
    */
   public casMission(missionId: string, expectedVersion: number, state: MissionState, payload: Record<string, JsonLike>): number {
     return this.runInTransaction(() => {
-      const currentVersion = this.getMissionStateVersion(missionId);
+      const existing = this.database.prepare(`
+        SELECT state_version FROM mission_metadata WHERE mission_id = @missionId
+      `).get({ missionId }) as { state_version: number } | undefined;
+      const currentVersion = existing?.state_version ?? 0;
       if (expectedVersion !== currentVersion) {
         throw new Error(`mission state version mismatch: expected ${expectedVersion}, found ${currentVersion}`);
       }
       const timestamp = nowIso();
       const nextVersion = currentVersion + 1;
-      this.database.prepare(`
-        UPDATE mission_metadata SET state = @state, state_version = @stateVersion WHERE mission_id = @missionId
-      `).run({ missionId, state, stateVersion: nextVersion });
       this.database.prepare(`
         INSERT INTO missions (mission_id, state, payload, state_version, created_at, updated_at)
         VALUES (@missionId, @state, @payload, @stateVersion, @timestamp, @timestamp)
@@ -317,6 +330,20 @@ export class SqlitePersistence {
           state_version = excluded.state_version,
           updated_at = excluded.updated_at
       `).run({ missionId, state, payload: toJsonString(payload), stateVersion: nextVersion, timestamp });
+      if (existing) {
+        this.database.prepare(`
+          UPDATE mission_metadata SET state = @state, state_version = @stateVersion WHERE mission_id = @missionId
+        `).run({ missionId, state, stateVersion: nextVersion });
+      } else {
+        const objective = typeof payload.objective === "string" ? payload.objective : "";
+        const sourceSessionMessageId = typeof payload.source_session_message_id === "string"
+          ? payload.source_session_message_id
+          : "";
+        this.database.prepare(`
+          INSERT INTO mission_metadata (mission_id, roster_id, objective, source_session_message_id, state, failure_reason, state_version)
+          VALUES (@missionId, NULL, @objective, @sourceSessionMessageId, @state, NULL, @stateVersion)
+        `).run({ missionId, objective, sourceSessionMessageId, state, stateVersion: nextVersion });
+      }
       return nextVersion;
     });
   }
@@ -842,7 +869,7 @@ export class SqlitePersistence {
   private assertNoActiveMissionForRosterHistory(): void {
     const active = this.database.prepare(`
       SELECT COUNT(*) as count FROM mission_metadata
-      WHERE state NOT IN (${activeMissionStatesSql})
+      WHERE roster_id IS NOT NULL AND state NOT IN (${activeMissionStatesSql})
     `).get() as { count: number };
     if (active.count > 0) throw new Error("cannot re-pair while a mission is active");
   }

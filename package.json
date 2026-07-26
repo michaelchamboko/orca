@@ -19,8 +19,9 @@
     "test:e2e:fake": "vitest run tests/e2e --exclude tests/e2e-real/**",
     "test:e2e:real": "vitest run tests/e2e-real",
     "test:coverage": "vitest run --coverage",
-    "verify:release": "pnpm run lint && pnpm run typecheck && pnpm run test:unit && pnpm run test:integration && pnpm run test:contract && pnpm run test:e2e:fake && pnpm run test:e2e:real && pnpm run test:coverage && pnpm run build",
-    "verify": "pnpm run verify:release",
+    "verify:95": "pnpm run lint && pnpm run typecheck && pnpm run build && pnpm run test:unit && pnpm run test:integration && pnpm run test:contract && pnpm run test:e2e:fake && pnpm run test:coverage",
+    "verify:release": "pnpm run verify:95 && pnpm run test:e2e:real",
+    "verify": "pnpm run verify:95",
     "swarmctl": "node dist/cli.js"
   },
   "dependencies": {
