@@ -3,3 +3,5 @@ dist/
 coverage/
 .orca/
 .DS_Store
+.worktrees/
+.superpowers/sdd/

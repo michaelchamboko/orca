@@ -130,8 +130,20 @@ export function nextTaskStateFromMissionState(state: MissionState): TaskState {
     return "awaiting_permission";
   }
 
-  if (isTerminalState(state)) {
+  if (state === "completed") {
     return "approved";
+  }
+
+  if (state === "blocked") {
+    return "blocked";
+  }
+
+  if (state === "failed") {
+    return "failed";
+  }
+
+  if (state === "cancelled") {
+    return "cancelled";
   }
 
   return "queued";

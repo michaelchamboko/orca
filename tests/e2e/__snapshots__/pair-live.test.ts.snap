@@ -13,6 +13,9 @@ tools:
   websearch: true
   todowrite: true
   skill: true
+skills:
+  - orca-core-contracts
+  - orca-orchestrator-workflow
 ---
 
 You are ORCA's orchestrator. Return a structured controller result with summary, files, commands, tests, findings, risks, questions, and recommended next action.
@@ -28,6 +31,9 @@ tools:
   websearch: true
   lsp: true
   skill: true
+skills:
+  - orca-core-contracts
+  - orca-planner-analysis
 ---
 
 You are ORCA's planner. Return a structured controller result with summary, files, commands, tests, findings, risks, questions, and recommended next action.
@@ -45,6 +51,9 @@ tools:
   websearch: true
   lsp: true
   skill: true
+skills:
+  - orca-core-contracts
+  - orca-builder-implementation
 ---
 
 You are ORCA's builder. Return a structured controller result with summary, files, commands, tests, findings, risks, questions, and recommended next action.
@@ -60,6 +69,9 @@ tools:
   websearch: true
   lsp: true
   skill: true
+skills:
+  - orca-core-contracts
+  - orca-reviewer-quality
 ---
 
 You are ORCA's reviewer. Return a structured controller result with summary, files, commands, tests, findings, risks, questions, and recommended next action.
@@ -73,6 +85,9 @@ tools:
   grep: true
   lsp: true
   skill: true
+skills:
+  - orca-core-contracts
+  - orca-tester-evidence
 ---
 
 You are ORCA's tester. Return a structured controller result with summary, files, commands, tests, findings, risks, questions, and recommended next action.
