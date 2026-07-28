@@ -96,7 +96,7 @@ export class MissionService {
             parentPromptMessageId: task.controllerPromptMessageId,
             promptPayload: { kind: "orchestrator_decision", missionId: task.missionId, taskId: task.taskId, gate, result: task.result }
           });
-          this.persistence.recordMissionEvent(task.missionId, task.taskId, "task.dispatched", { role: "orchestrator", dispatchKey: decision.dispatchKey });
+          this.persistence.recordMissionEvent(task.missionId, task.taskId, "task.dispatched", { role: "orchestrator", purpose: "orchestrator_decision", dispatchKey: decision.dispatchKey, gate, promptMessageId: decision.promptMessageId });
         }
       });
       reconciled += 1;
@@ -191,12 +191,29 @@ export class MissionService {
       });
       const nextState = nextStateForApproval(previousState);
       this.transitionMission({ missionId: action.missionId, nextState, expectedState: previousState });
+      if (nextState === "awaiting_final_approval") {
+        const finalGate = "final" as const;
+        const decision = this.context.nextDecisionPrompt(action.missionId, finalGate, taskIdForApproval ?? `${action.missionId}-final`);
+        this.persistence.enqueueDispatch({
+          missionId: action.missionId,
+          dispatchKey: decision.dispatchKey,
+          targetRole: "orchestrator",
+          targetSessionId: decision.targetSessionId,
+          capturedModel: decision.capturedModel,
+          promptMessageId: decision.promptMessageId,
+          purpose: "orchestrator_decision",
+          parentPromptMessageId: null,
+          promptPayload: { kind: "orchestrator_decision", missionId: action.missionId, taskId: null, gate: finalGate }
+        });
+        this.persistence.recordMissionEvent(action.missionId, null, "task.dispatched", { role: "orchestrator", purpose: "orchestrator_decision", dispatchKey: decision.dispatchKey, gate: finalGate, promptMessageId: decision.promptMessageId });
+      }
       return { applied: true, superseded: false, missionBlocked: false };
     }
 
     if (action.action === "reject") {
       const gate = gateFromState(currentState);
-      const priorAttempts = correctionAttemptsFor(action.missionId, roleForGate(gate), this.persistence);
+      const correctionRole: Exclude<Role, "orchestrator"> = gate === "plan" ? "planner" : "builder";
+      const priorAttempts = correctionAttemptsFor(action.missionId, correctionRole, this.persistence);
       if (priorAttempts >= CORRECTION_ATTEMPT_CAP) {
         this.persistence.runInTransaction(() => {
           this.persistence.setMissionFailure(action.missionId, `exceeded correction cap on gate ${gate}`);
@@ -207,20 +224,19 @@ export class MissionService {
         this.persistence.recordApproval({ approvalId: randomUUID(), missionId: action.missionId, taskId: taskIdForApproval, decision: "rejected", reason: action.rationale });
         this.persistence.recordMissionEvent(action.missionId, taskIdForApproval ?? null, "approval.rejected", { decision: "rejected", sourceMessageId, gate });
       });
-      const role = roleForGate(gate);
-      const next = this.context.nextTaskForRole(role, action.missionId, priorAttempts + 1);
+      const next = this.context.nextTaskForRole(correctionRole, action.missionId, priorAttempts + 1);
       this.persistence.runInTransaction(() => {
         this.persistence.saveTaskExecution({ envelope: next.envelope, targetSessionId: next.targetSessionId, controllerPromptMessageId: next.promptMessageId, state: "dispatched" });
         this.persistence.recordTaskPromptAttempt(next.envelope.taskId, next.promptMessageId, "worker_task", priorAttempts + 1);
         this.persistence.enqueueDispatch({
           missionId: action.missionId,
           dispatchKey: next.dispatchKey,
-          targetRole: role,
+          targetRole: correctionRole,
           targetSessionId: next.targetSessionId,
           capturedModel: next.capturedModel,
           promptMessageId: next.promptMessageId
         });
-        this.persistence.recordMissionEvent(action.missionId, next.envelope.taskId, "task.correction", { role, dispatchKey: next.dispatchKey, attempt: priorAttempts + 1 });
+        this.persistence.recordMissionEvent(action.missionId, next.envelope.taskId, "task.correction", { role: correctionRole, dispatchKey: next.dispatchKey, attempt: priorAttempts + 1 });
       });
       return { applied: true, superseded: false, missionBlocked: false };
     }
@@ -249,7 +265,7 @@ export function dispatchPurposeForState(state: MissionState): DispatchPurpose {
 
 function correctionAttemptsFor(missionId: string, role: Role, persistence: WorkflowPersistence): number {
   let attempts = 0;
-  for (const task of persistence.getTaskExecutionsForCompletion()) {
+  for (const task of persistence.listAllTaskExecutions()) {
     if (task.missionId === missionId && task.role === role) attempts += 1;
   }
   return attempts;
@@ -269,21 +285,6 @@ function gateFromState(state: MissionState): "plan" | "builder" | "review" | "te
       return "final";
     default:
       throw new Error(`state ${state} is not an approval gate`);
-  }
-}
-
-function roleForGate(gate: "plan" | "builder" | "review" | "test" | "final"): Exclude<Role, "orchestrator"> {
-  switch (gate) {
-    case "plan":
-      return "planner";
-    case "builder":
-      return "builder";
-    case "review":
-      return "reviewer";
-    case "test":
-      return "tester";
-    case "final":
-      throw new Error("final gate has no worker role");
   }
 }
 

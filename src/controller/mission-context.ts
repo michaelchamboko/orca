@@ -78,13 +78,14 @@ export function buildMissionContext(options: {
     _decisionPromptMessageId: string
   ): Promise<"applied" | "superseded" | "rejected"> => {
     void _decisionPromptMessageId;
-    const mission = options.persistence.getMission(action.missionId);
-    if (!mission) return "rejected";
-    const priorState = mission.state;
+    const prior = options.persistence.getMission(action.missionId);
+    if (!prior) return "rejected";
+    const priorState = prior.state;
     const result = missionService.applyOrchestratorAction(action, messageId);
     if (result.missionBlocked) return "rejected";
     if (!result.applied) return "rejected";
-    if (priorState === mission.state) return "superseded";
+    const after = options.persistence.getMission(action.missionId);
+    if (!after || after.state === priorState) return "superseded";
     return "applied";
   };
 
