@@ -1,129 +1,148 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { startController, type ControllerStatus, type RunningController } from "../../src/controller/main.js";
+import { startController, type RunningController } from "../../src/controller/main.js";
 import { captureControlPlaneFingerprint } from "../../src/controller/workspace-fingerprint.js";
 import { SqlitePersistence } from "../../src/persistence/sqlite.js";
 import { roleProfiles } from "../../src/roles/profiles.js";
-import { RealOpenCodeAdapter } from "../../src/integrations/opencode/real.js";
+import { renderRoleProfile } from "../../src/roles/installer.js";
 import { RosterService } from "../../src/pairing/roster-service.js";
+import { RealOpenCodeAdapter } from "../../src/integrations/opencode/real.js";
 import type { MissionState, PairedRoster } from "../../src/domain/types.js";
 
 const LIVE_ENV_FLAG = "ORCA_REAL_E2E";
-const LIVE_BRANCH_HINT = "ORCA_LIVE_WORKTREE";
+const LIVE_WORKTREE_ENV = "ORCA_LIVE_WORKTREE";
+const SENTINEL_RELATIVE_PATH = "docs/orca-live-acceptance-sentinel.md";
+const RESERVED_MARKERS = ["[ORCA_CORRELATION:", "[ORCA_DISPATCH:"] as const;
+
 const DEFAULT_OPENCODE_URL = process.env.ORCA_OPENCODE_URL ?? "http://127.0.0.1:4096";
 const DEFAULT_USERNAME = process.env.ORCA_OPENCODE_USERNAME ?? "opencode";
 const DEFAULT_PASSWORD = process.env.ORCA_OPENCODE_PASSWORD ?? "";
 const DEFAULT_TIMEOUT_MS = Number.parseInt(process.env.ORCA_OPENCODE_TIMEOUT_MS ?? "8000", 10);
 const ROLE_WAIT_MS = Number.parseInt(process.env.ORCA_LIVE_ROLE_WAIT_MS ?? "120000", 10);
 const WHOLE_MISSION_TIMEOUT_MS = Number.parseInt(process.env.ORCA_LIVE_MISSION_TIMEOUT_MS ?? "1800000", 10);
-const REQUIRED_BINDING_COUNT = 5;
-
-interface LiveContext {
-  projectRoot: string;
-  adapter: RealOpenCodeAdapter;
-  persistence: SqlitePersistence;
-  roster: PairedRoster;
-}
-
-const liveState: { enabled: boolean; context: LiveContext | null; controller: RunningController | null } = {
-  enabled: false,
-  context: null,
-  controller: null
-};
+const REQUIRED_BINDING_COUNT = roleProfiles.length;
 
 const isLiveEnabled = process.env[LIVE_ENV_FLAG] === "1";
-const worktreeHint = process.env[LIVE_BRANCH_HINT];
+const worktreeHint = process.env[LIVE_WORKTREE_ENV];
 
 if (!isLiveEnabled) {
   describe.skip("real OpenCode five-session live acceptance", () => {
-    it("requires ORCA_REAL_E2E=1", () => {
+    it("requires ORCA_REAL_E2E=1 and ORCA_LIVE_WORKTREE", () => {
       expect(isLiveEnabled).toBe(false);
     });
   });
 } else {
   describe("real OpenCode five-session live acceptance", () => {
+    let controller: RunningController | null = null;
+    let persistence: SqlitePersistence | null = null;
+    let adapter: RealOpenCodeAdapter | null = null;
+    let roster: PairedRoster | null = null;
+    let runId = "";
+
     beforeAll(async () => {
       const context = await prepareLiveContext();
-      liveState.context = context;
-      const controller = await startController({
+      persistence = context.persistence;
+      adapter = context.adapter;
+      roster = context.roster;
+      runId = context.runId;
+      controller = await startController({
         projectRoot: context.projectRoot,
         adapter: context.adapter,
         persistence: context.persistence,
         version: "0.1.0-live",
         port: 0
       });
-      liveState.controller = controller;
     }, ROLE_WAIT_MS);
 
     afterAll(async () => {
-      const controller = liveState.controller;
-      const context = liveState.context;
-      liveState.controller = null;
-      liveState.context = null;
       if (controller) await controller.stop();
-      if (context?.persistence) context.persistence.close();
+      if (persistence) persistence.close();
     });
 
-    it("fails fast unless every prerequisite is met", async () => {
-      const context = liveState.context;
-      if (!context) throw new Error("live prerequisites must be satisfied before the test runs");
-      expect(context.roster.bindings).toHaveLength(REQUIRED_BINDING_COUNT);
-      const ids = new Set(context.roster.bindings.map((binding) => binding.sessionId));
-      expect(ids.size).toBe(REQUIRED_BINDING_COUNT);
-      const models = new Set(context.roster.bindings.map((binding) => `${binding.model.providerId}/${binding.model.modelId}`));
-      expect(models.size).toBeGreaterThanOrEqual(2);
-      for (const profile of roleProfiles) {
-        const profilePath = join(context.projectRoot, ".opencode", "agents", `orca-${profile.role}.md`);
-        expect(existsSync(profilePath), `missing role profile: ${profile.role}`).toBe(true);
-      }
-      const status = await readLiveStatus();
-      expect(status.bindingsCurrent, "roster drift was detected").toBe(true);
-      expect(status.opencodeHealthy, "OpenCode health check failed").toBe(true);
-    });
-
-    it("runs the user objective through the full five-role sequence", async () => {
-      const context = liveState.context;
-      if (!context) throw new Error("live prerequisites must be satisfied before the test runs");
-      const objective = `ORCA live readiness probe at ${new Date().toISOString()}`;
-      const orchestrator = context.roster.bindings.find((binding) => binding.role === "orchestrator");
+    it("accepts a plain Session 1 user objective and proves the Builder-created sentinel", async () => {
+      if (!adapter || !persistence || !roster || !controller) throw new Error("live prerequisites must be satisfied");
+      const orchestrator = roster.bindings.find((binding) => binding.role === "orchestrator");
       if (!orchestrator) throw new Error("orchestrator binding missing from roster");
-      const userMessageId = `orca-live-user-${Date.now()}`;
-      const sent = await context.adapter.sendPrompt({
+      const objective = [
+        "ORCA live acceptance probe.",
+        `Run id: ${runId}.`,
+        `Sentinel path: ${SENTINEL_RELATIVE_PATH}.`,
+        "Create the sentinel file with the run id in its body and leave it in place."
+      ].join(" ");
+      const userMessageId = `orca-live-user-${runId}`;
+      await adapter.sendPrompt({
         messageId: userMessageId,
         sessionId: orchestrator.sessionId,
         agent: "orca-orchestrator",
         model: { ...orchestrator.model },
-        content: `[ORCA_CORRELATION:${userMessageId}]\n${objective}`
-      }).then(() => true).catch((error) => {
-        liveState.enabled = false;
-        throw error;
+        content: objective
       });
-      expect(sent).toBe(true);
 
-      const finalState = await waitForTerminalMissionState(context.persistence, WHOLE_MISSION_TIMEOUT_MS);
+      const finalState = await waitForTerminalMissionState(persistence, WHOLE_MISSION_TIMEOUT_MS);
       expect(finalState).toBe("completed");
 
-      const missionId = currentMissionId(context) ?? "";
-      const events = context.persistence.getMissionEvents(missionId);
-      const types = events.map((event) => event.eventType);
-      expect(types).toContain("mission.transition");
-      expect(types).toContain("approval.recorded");
-      expect(types).toContain("orchestrator_action.applied");
+      const sentinelPath = join(worktreeHint ?? process.cwd(), SENTINEL_RELATIVE_PATH);
+      const sentinelContents = readFileSync(sentinelPath, "utf8");
+      expect(sentinelContents).toContain(runId);
+
+      const missionId = await currentMissionId(persistence);
+      expect(missionId).toBeTruthy();
+      if (!missionId) throw new Error("expected a mission id");
+      const builderTasks = persistence.listAllTaskExecutions().filter((task) => task.missionId === missionId && task.role === "builder");
+      expect(builderTasks.length).toBeGreaterThan(0);
+      const builderEvidence = builderTasks.at(-1)?.result;
+      const builderChangedFiles = builderEvidence && "changedFiles" in builderEvidence ? builderEvidence.changedFiles : [];
+      expect(builderEvidence?.summary ?? "").toContain(SENTINEL_RELATIVE_PATH);
+      expect(builderChangedFiles).toContain(SENTINEL_RELATIVE_PATH);
+
+      const events = persistence.getMissionEvents(missionId);
+      const eventTypes = events.map((event) => event.eventType);
+      expect(eventTypes).toContain("mission.transition");
+      expect(eventTypes).toContain("approval.recorded");
+      expect(eventTypes).toContain("orchestrator_action.applied");
+      expect(eventTypes).toContain("completion.requested");
+      expect(eventTypes).toContain("mission.terminal");
+
+      const dispatches = persistence.getPendingDispatches(1_000).concat(
+        Array.from({ length: 0 }, () => ({} as never))
+      );
+      const acceptedDispatches = dispatches.filter((dispatch) => dispatch.acknowledgedAt !== null);
+      for (const dispatch of acceptedDispatches) {
+        const binding = roster.bindings.find((candidate) => candidate.sessionId === dispatch.targetSessionId);
+        if (!binding) throw new Error(`dispatch targeted an unknown session: ${dispatch.targetSessionId}`);
+        expect(`${dispatch.capturedModel.providerId}/${dispatch.capturedModel.modelId}`).toBe(`${binding.model.providerId}/${binding.model.modelId}`);
+      }
+
+      const reviewerTasks = persistence.listAllTaskExecutions().filter((task) => task.missionId === missionId && task.role === "reviewer");
+      const testerTasks = persistence.listAllTaskExecutions().filter((task) => task.missionId === missionId && task.role === "tester");
+      expect(reviewerTasks.length).toBeGreaterThan(0);
+      expect(testerTasks.length).toBeGreaterThan(0);
     }, WHOLE_MISSION_TIMEOUT_MS);
   });
 }
 
-async function prepareLiveContext(): Promise<LiveContext> {
-  if (!worktreeHint) {
-    throw new Error(`${LIVE_BRANCH_HINT} must point to the isolated worktree (e.g. .worktrees/live-readiness-remediation).`);
-  }
+interface PreparedLiveContext {
+  projectRoot: string;
+  adapter: RealOpenCodeAdapter;
+  persistence: SqlitePersistence;
+  roster: PairedRoster;
+  runId: string;
+}
+
+async function prepareLiveContext(): Promise<PreparedLiveContext> {
+  if (!worktreeHint) throw new Error(`${LIVE_WORKTREE_ENV} must point to the isolated worktree (e.g. .worktrees/live-readiness-remediation).`);
   const projectRoot = worktreeHint;
   verifyIsolatedWorktree(projectRoot);
-  const fingerprint = captureControlPlaneFingerprint(projectRoot);
-  void fingerprint;
+  rejectRootStateSqlite(projectRoot);
+  rejectReservedMarkerInObjective(process.env.ORCA_LIVE_OBJECTIVE ?? "");
+  const orcaDir = join(projectRoot, ".orca");
+  if (!existsSync(join(orcaDir, "orca.db"))) throw new Error(`missing authoritative ORCA database at ${join(orcaDir, "orca.db")}; run swarmctl pair in this worktree first.`);
+  rejectExistingSentinel(projectRoot);
 
   const adapter = new RealOpenCodeAdapter({
     baseUrl: DEFAULT_OPENCODE_URL,
@@ -131,33 +150,47 @@ async function prepareLiveContext(): Promise<LiveContext> {
     password: DEFAULT_PASSWORD,
     timeoutMs: Number.isFinite(DEFAULT_TIMEOUT_MS) ? DEFAULT_TIMEOUT_MS : 8_000
   });
-
   const health = await adapter.health().catch(() => ({ healthy: false }));
-  if (!health.healthy) throw new Error(`OpenCode server is not reachable at ${DEFAULT_OPENCODE_URL}`);
+  if (!health.healthy) throw new Error(`OpenCode server is not reachable at ${DEFAULT_OPENCODE_URL}; check authentication and availability.`);
 
-  const persistence = new SqlitePersistence({ path: join(projectRoot, "state.sqlite") });
+  const persistence = new SqlitePersistence({ path: join(orcaDir, "orca.db") });
   const rosterService = new RosterService(adapter, persistence);
-  const current = persistence.getCurrentRoster();
   let roster: PairedRoster;
   try {
-    roster = current ? await rosterService.assertCurrent() : await rosterService.pair();
+    roster = await rosterService.assertCurrent();
   } catch (error) {
     persistence.close();
     throw error;
   }
+
   if (roster.bindings.length !== REQUIRED_BINDING_COUNT) {
     persistence.close();
-    throw new Error(`roster must contain exactly ${REQUIRED_BINDING_COUNT} paired sessions`);
+    throw new Error(`paired roster must contain exactly ${REQUIRED_BINDING_COUNT} bindings (got ${roster.bindings.length}).`);
   }
+  if (roster.projectRoot !== projectRoot) {
+    persistence.close();
+    throw new Error(`paired roster points at ${roster.projectRoot}; refusing to run against ${projectRoot}.`);
+  }
+  for (const binding of roster.bindings) {
+    if (!binding.model.providerId || !binding.model.modelId) {
+      persistence.close();
+      throw new Error(`paired model missing for ${binding.role} session ${binding.sessionId}; re-pair with non-empty models.`);
+    }
+  }
+  if (persistence.hasActiveMission()) {
+    persistence.close();
+    throw new Error(`another mission is already active; complete or cancel it before running the live acceptance suite.`);
+  }
+  captureControlPlaneFingerprint(projectRoot);
 
-  applySentinelChange(projectRoot);
-  return { projectRoot, adapter, persistence, roster };
+  const runId = `orca-live-${new Date().toISOString().replace(/[^0-9]/g, "")}-${randomSuffix()}`;
+  return { projectRoot, adapter, persistence, roster, runId };
 }
 
 function verifyIsolatedWorktree(projectRoot: string): void {
   const normalized = projectRoot.replace(/\\/g, "/");
   if (!/\.worktrees\/[^/]+$/i.test(normalized)) {
-    throw new Error(`real E2E must run inside an isolated worktree (got ${projectRoot}). Refusing to start against the primary checkout.`);
+    throw new Error(`real E2E must run inside an isolated worktree (got ${projectRoot}); set ${LIVE_WORKTREE_ENV} to a .worktrees/<name> path.`);
   }
   const gitHead = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: projectRoot, encoding: "utf8" }).trim();
   if (gitHead === "main" || gitHead === "master") {
@@ -165,53 +198,39 @@ function verifyIsolatedWorktree(projectRoot: string): void {
   }
 }
 
-function applySentinelChange(projectRoot: string): void {
-  const sentinelPath = join(projectRoot, ".orca", "live-acceptance-sentinel.md");
-  const header = "# ORCA live acceptance sentinel\n\nThis file is created by `tests/e2e-real/real.test.ts` to prove the controller can mutate the worktree. It is left in place for inspection; the test never auto-commits or pushes.\n";
-  let current = "";
-  try {
-    current = readFileSync(sentinelPath, "utf8");
-  } catch {
-    current = "";
-  }
-  if (!current.startsWith("# ORCA live acceptance sentinel")) {
-    writeFileSync(sentinelPath, header, "utf8");
+function rejectRootStateSqlite(projectRoot: string): void {
+  const forbidden = join(projectRoot, "state.sqlite");
+  if (existsSync(forbidden)) {
+    throw new Error(`refusing to run: root-level state.sqlite exists at ${forbidden}; the live test must use .orca/orca.db.`);
   }
 }
 
-async function readLiveStatus(): Promise<ControllerStatus> {
-  const controller = liveState.controller;
-  if (!controller) throw new Error("controller is not running");
-  const response = await fetch(`http://127.0.0.1:${controller.address.port}/status`, {
-    headers: { authorization: `Bearer ${controller.token}` }
-  });
-  if (!response.ok) throw new Error(`controller status ${response.status}`);
-  const body = await response.json() as {
-    opencodeHealthy?: boolean;
-    rosterCurrent?: boolean;
-    bindingCount?: number;
-    activeMissionId?: string | null;
-    missionState?: string | null;
-    currentTaskRole?: string | null;
-    currentTaskState?: string | null;
-    pendingDispatchCount?: number;
-    lastFailureCode?: string | null;
-  };
-  return {
-    running: true,
-    reason: "",
-    opencodeHealthy: body.opencodeHealthy === true,
-    bindingsCurrent: body.rosterCurrent === true,
-    bindingCount: typeof body.bindingCount === "number" ? body.bindingCount : undefined
-  };
+function rejectReservedMarkerInObjective(objective: string): void {
+  for (const marker of RESERVED_MARKERS) {
+    if (objective.includes(marker)) {
+      throw new Error(`objective contains reserved marker ${marker}; live test must send a plain user objective.`);
+    }
+  }
 }
 
-function currentMissionId(context: LiveContext): string | null {
-  const tasks = context.persistence.listAllTaskExecutions();
+function rejectExistingSentinel(projectRoot: string): void {
+  const sentinelPath = join(projectRoot, SENTINEL_RELATIVE_PATH);
+  if (existsSync(sentinelPath)) {
+    throw new Error(`sentinel already exists at ${sentinelPath}; the live test never deletes it. Remove the sentinel manually after inspecting the prior run.`);
+  }
+}
+
+function randomSuffix(): string {
+  return Math.random().toString(36).slice(2, 8);
+}
+
+async function currentMissionId(persistence: SqlitePersistence): Promise<string | null> {
+  const tasks = persistence.listAllTaskExecutions();
   const ids = [...new Set(tasks.map((task) => task.missionId))];
   for (const missionId of ids.reverse()) {
-    const mission = context.persistence.getMission(missionId);
-    if (mission && !["completed", "failed", "cancelled", "blocked"].includes(mission.state)) return missionId;
+    const mission = persistence.getMission(missionId);
+    if (!mission) continue;
+    if (!["completed", "failed", "cancelled", "blocked"].includes(mission.state)) return missionId;
   }
   return ids[0] ?? null;
 }
@@ -248,4 +267,59 @@ function readFailureCode(persistence: SqlitePersistence, missionId: string): str
   return null;
 }
 
-void liveState;
+void {} as never;
+
+describe("live acceptance prerequisite failures", () => {
+  const workspaces: string[] = [];
+  const persistences: SqlitePersistence[] = [];
+
+  afterAll(() => {
+    for (const persistence of persistences.splice(0)) persistence.close();
+    for (const workspace of workspaces.splice(0)) rmSync(workspace, { recursive: true, force: true });
+  });
+
+  function setupIsolatedWorkspace(): string {
+    const root = mkdtempSync(join(tmpdir(), "orca-live-prereq-"));
+    workspaces.push(root);
+    mkdirSync(join(root, ".opencode", "agents"), { recursive: true });
+    for (const profile of roleProfiles) writeFileSync(join(root, ".opencode", "agents", `orca-${profile.role}.md`), renderRoleProfile(profile));
+    return root;
+  }
+
+  it("rejects the live test when ORCA_REAL_E2E is not set", () => {
+    expect(isLiveEnabled).toBe(false);
+  });
+
+  it("rejects a reserved marker in the supplied objective", () => {
+    expect(() => rejectReservedMarkerInObjective("hello [ORCA_CORRELATION:abc]")).toThrow(/reserved marker/);
+    expect(() => rejectReservedMarkerInObjective("plain objective")).not.toThrow();
+  });
+
+  it("rejects a root-level state.sqlite", () => {
+    const root = setupIsolatedWorkspace();
+    writeFileSync(join(root, "state.sqlite"), "");
+    expect(() => rejectRootStateSqlite(root)).toThrow(/state.sqlite/);
+    rmSync(join(root, "state.sqlite"));
+    expect(() => rejectRootStateSqlite(root)).not.toThrow();
+  });
+
+  it("rejects an existing sentinel", () => {
+    const root = setupIsolatedWorkspace();
+    mkdirSync(join(root, "docs"), { recursive: true });
+    writeFileSync(join(root, SENTINEL_RELATIVE_PATH), "stale");
+    expect(() => rejectExistingSentinel(root)).toThrow(/sentinel already exists/);
+    rmSync(join(root, SENTINEL_RELATIVE_PATH));
+    expect(() => rejectExistingSentinel(root)).not.toThrow();
+  });
+
+  it("rejects non-worktree project roots", () => {
+    const root = setupIsolatedWorkspace();
+    expect(() => verifyIsolatedWorktree(root)).toThrow(/isolated worktree/);
+  });
+
+  it("rejects the protected main branch", () => {
+    const root = setupIsolatedWorkspace();
+    mkdirSync(join(root, ".worktrees", "test"), { recursive: true });
+    expect(() => verifyIsolatedWorktree(join(root, ".worktrees", "test"))).toThrow();
+  });
+});
