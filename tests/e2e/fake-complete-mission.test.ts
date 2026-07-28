@@ -325,7 +325,49 @@ async function submitOrchestratorActionAndAdvance(ctx: TestContext, missionId: s
   const responseId = `orchestrator-${action}-${gate}`;
   ctx.adapter.addMessage(assistantMessage(responseId, ROLE_SESSION.orchestrator, promptMessageId, orchestratorAction(missionId, action, taskId, correctionInstructions)));
   ctx.adapter.emit({ type: "message.updated", sessionId: ROLE_SESSION.orchestrator, messageId: responseId });
-  await sleep(2_000);
+  await waitForMissionStateTransition(ctx, missionId, action, gate);
+  await waitForMissionDispatchSettled(ctx, missionId);
+}
+
+async function waitForMissionStateTransition(ctx: TestContext, missionId: string, action: "approve" | "reject" | "request_completion", gate: "plan" | "builder" | "review" | "test" | "final"): Promise<void> {
+  const expectedState = expectedStateAfterAction(action, gate);
+  await eventually(() => {
+    const mission = ctx.persistence.getMission(missionId);
+    if (!mission) throw new Error(`mission ${missionId} disappeared`);
+    if (mission.state !== expectedState) {
+      const events = ctx.persistence.getMissionEvents(missionId);
+      const latest = events.slice(-6).map((event) => `${event.eventType}=${(event.payload as { reason?: string }).reason ?? ""}`).join(" | ");
+      throw new Error(`mission ${missionId} state: expected ${expectedState}, found ${mission.state}; latest events: ${latest}`);
+    }
+    return mission.state;
+  }, { timeoutMs: 10_000 });
+}
+
+async function waitForMissionDispatchSettled(ctx: TestContext, missionId: string): Promise<void> {
+  await eventually(() => {
+    const pending = ctx.persistence.getPendingDispatches().filter((dispatch) => dispatch.missionId === missionId);
+    if (pending.length > 0) {
+      throw new Error(`pending dispatches for mission ${missionId}: ${pending.length}`);
+    }
+    return pending.length;
+  }, { timeoutMs: 8_000 });
+}
+
+function expectedStateAfterAction(action: "approve" | "reject" | "request_completion", gate: "plan" | "builder" | "review" | "test" | "final"): string {
+  if (action === "request_completion") return "completed";
+  if (action === "reject") {
+    if (gate === "plan") return "awaiting_plan_approval";
+    if (gate === "review") return "awaiting_review_approval";
+    if (gate === "test") return "awaiting_test_approval";
+    return "awaiting_plan_approval";
+  }
+  switch (gate) {
+    case "plan": return "building";
+    case "builder": return "reviewing";
+    case "review": return "testing";
+    case "test": return "awaiting_final_approval";
+    case "final": return "completed";
+  }
 }
 
 async function runControllerChecksForMission(ctx: TestContext, missionId: string): Promise<void> {
@@ -441,7 +483,11 @@ describe("full fake five-session ORCA mission", () => {
     const promptMessageId = await waitForOrchestratorDecisionPrompt(ctx, "plan");
     ctx.adapter.addMessage(assistantMessage("premature-complete", ROLE_SESSION.orchestrator, promptMessageId, orchestratorAction(missionId, "request_completion")));
     ctx.adapter.emit({ type: "message.updated", sessionId: ROLE_SESSION.orchestrator, messageId: "premature-complete" });
-    await sleep(2_000);
+    await eventually(() => {
+      const events = ctx.persistence.getMissionEvents(missionId).filter((event) => event.eventType === "orchestrator_action.rejected");
+      if (events.length === 0) throw new Error("premature completion has not been recorded yet");
+      return events.length;
+    }, { timeoutMs: 8_000 });
 
     expect(ctx.persistence.getMission(missionId)?.state).toBe("awaiting_plan_approval");
     const rejectionEvents = ctx.persistence.getMissionEvents(missionId).filter((event) => event.eventType === "orchestrator_action.rejected");
@@ -464,7 +510,11 @@ describe("full fake five-session ORCA mission", () => {
     ctx.adapter.addMessage(assistantMessage(responseId, ROLE_SESSION.orchestrator, planPrompt, orchestratorAction(missionId, "approve", plannerTaskId)));
     ctx.adapter.emit({ type: "message.updated", sessionId: ROLE_SESSION.orchestrator, messageId: responseId });
     ctx.adapter.emit({ type: "message.updated", sessionId: ROLE_SESSION.orchestrator, messageId: responseId });
-    await sleep(3_500);
+    await eventually(() => {
+      if (ctx.persistence.getMission(missionId)?.state !== "building") throw new Error("mission not yet advanced to building");
+      return ctx.persistence.getMission(missionId)?.state;
+    }, { timeoutMs: 8_000 });
+    await waitForRolePrompt(ctx, "builder");
 
     const orchestratorEvents = ctx.persistence.getMissionEvents(missionId).filter((e) => e.eventType.startsWith("orchestrator_action"));
     const appliedCount = orchestratorEvents.filter((e) => e.eventType === "orchestrator_action.applied").length;
@@ -489,7 +539,16 @@ describe("full fake five-session ORCA mission", () => {
     const responseId = "smoke-approval";
     ctx.adapter.addMessage(assistantMessage(responseId, ROLE_SESSION.orchestrator, planPrompt, orchestratorAction(missionId, "approve", plannerTaskId)));
     ctx.adapter.emit({ type: "message.updated", sessionId: ROLE_SESSION.orchestrator, messageId: responseId });
-    await sleep(3_000);
+    await eventually(() => {
+      const mission = ctx.persistence.getMission(missionId);
+      if (mission?.state !== "building") throw new Error(`mission state: ${mission?.state}`);
+      return mission.state;
+    }, { timeoutMs: 8_000 });
+    await eventually(() => {
+      const pending = ctx.persistence.getPendingDispatches();
+      if (pending.length !== 0) throw new Error(`pending dispatches: ${pending.length}`);
+      return pending.length;
+    }, { timeoutMs: 8_000 });
 
     expect(ctx.persistence.getMission(missionId)?.state).toBe("building");
     const pendingDispatches = ctx.persistence.getPendingDispatches();
@@ -557,7 +616,11 @@ describe("full fake five-session ORCA mission", () => {
 
     ctx.adapter.addMessage(assistantMessage("stale-approval", ROLE_SESSION.orchestrator, planPrompt, orchestratorAction(missionId, "approve", plannerTaskId)));
     ctx.adapter.emit({ type: "message.updated", sessionId: ROLE_SESSION.orchestrator, messageId: "stale-approval" });
-    await sleep(2_000);
+    await eventually(() => {
+      const staleEvents = ctx.persistence.getMissionEvents(missionId).filter((event) => event.eventType === "orchestrator_action.rejected");
+      if (staleEvents.length === 0) throw new Error("no orchestrator_action.rejected event yet");
+      return staleEvents.length;
+    }, { timeoutMs: 8_000 });
 
     expect(ctx.persistence.getMission(missionId)?.state).toBe("building");
     const staleEvents = ctx.persistence.getMissionEvents(missionId).filter((event) => event.eventType === "orchestrator_action.rejected");
@@ -602,4 +665,49 @@ describe("full fake five-session ORCA mission", () => {
     }
     expect(allDispatchKeys.size).toBeGreaterThan(0);
   }, 60_000);
+
+  it("advances a delayed but valid final action to completed within a bounded wait", async () => {
+    const ctx = await setupContext();
+    await startFakeController(ctx);
+
+    await submitUserObjective(ctx, "Build the ORCA release");
+    const missionId = await waitForMission(ctx, 0);
+
+    await waitForRolePrompt(ctx, "planner");
+    await submitWorkerResultAndAdvance(ctx, "planner", plannerResult(missionId, taskFor(ctx, missionId, "planner").taskId), missionId);
+    await submitOrchestratorActionAndAdvance(ctx, missionId, "approve", "plan", taskFor(ctx, missionId, "planner").taskId);
+
+    await waitForRolePrompt(ctx, "builder");
+    const builderTaskId = taskFor(ctx, missionId, "builder").taskId;
+    await submitWorkerResultAndAdvance(ctx, "builder", builderResult(missionId, builderTaskId), missionId);
+    await submitOrchestratorActionAndAdvance(ctx, missionId, "approve", "builder", builderTaskId);
+
+    await waitForRolePrompt(ctx, "reviewer");
+    const reviewerTaskId = taskFor(ctx, missionId, "reviewer").taskId;
+    await submitWorkerResultAndAdvance(ctx, "reviewer", reviewerPass(missionId, reviewerTaskId), missionId);
+    await runControllerChecksForMission(ctx, missionId);
+    await submitOrchestratorActionAndAdvance(ctx, missionId, "approve", "review", reviewerTaskId);
+
+    await waitForRolePrompt(ctx, "tester");
+    const testerTaskId = taskFor(ctx, missionId, "tester").taskId;
+    await submitWorkerResultAndAdvance(ctx, "tester", testerPass(missionId, testerTaskId), missionId);
+    await submitOrchestratorActionAndAdvance(ctx, missionId, "approve", "test", testerTaskId);
+
+    await waitForOrchestratorDecisionPrompt(ctx, "final");
+    await new Promise((resolve) => globalThis.setTimeout(resolve, 250));
+    const finalPromptMessageId = ctx.adapter.prompts().filter((p) => p.sessionId === ROLE_SESSION.orchestrator && p.content.includes("gate=final")).at(-1)?.messageId;
+    if (!finalPromptMessageId) throw new Error("missing final prompt");
+    const responseId = "delayed-final";
+    ctx.adapter.addMessage(assistantMessage(responseId, ROLE_SESSION.orchestrator, finalPromptMessageId, orchestratorAction(missionId, "request_completion")));
+    ctx.adapter.emit({ type: "message.updated", sessionId: ROLE_SESSION.orchestrator, messageId: responseId });
+
+    await eventually(() => {
+      const mission = ctx.persistence.getMission(missionId);
+      if (!mission) throw new Error("mission disappeared");
+      if (mission.state !== "completed") throw new Error(`mission state: ${mission.state}`);
+      return mission.state;
+    }, { timeoutMs: 10_000 });
+
+    expect(ctx.persistence.getMission(missionId)?.state).toBe("completed");
+  }, 90_000);
 });
