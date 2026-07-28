@@ -11,6 +11,27 @@ const config = [
   },
   js.configs.recommended,
   {
+    files: ["scripts/**/*.{js,mjs,cjs}", "**/*.cjs"],
+    languageOptions: {
+      ecmaVersion: "latest",
+      sourceType: "commonjs",
+      globals: {
+        process: "readonly",
+        __dirname: "readonly",
+        __filename: "readonly",
+        Buffer: "readonly",
+        module: "readonly",
+        require: "readonly",
+        console: "readonly",
+        setTimeout: "readonly",
+        clearTimeout: "readonly",
+        spawnSync: "readonly",
+        path: "readonly",
+        fs: "readonly"
+      }
+    }
+  },
+  {
     files: ["**/*.{ts,tsx}", "**/*.mts", "**/*.cts"],
     languageOptions: {
       parser: tsParser,

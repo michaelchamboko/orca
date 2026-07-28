@@ -2,242 +2,238 @@
 
 ## 1. Executive Summary
 
-**Overall status: Major architectural gaps.** ORCA is presently a TypeScript foundation, not an operational five-session controller. Verified code provides versioned CLI metadata, a host-agnostic OpenCode command-registration shape, strict task/result schemas, small workflow/approval helpers, and a SQLite wrapper with a basic outbox table. The controller entry point is an empty placeholder. Pairing, adapter calls, dispatch, role/skill installation, completion detection, API authentication, and recovery are not implemented. No real OpenCode five-session test was available or completed.
+**Status:** ORCA is a controller-first OpenCode orchestration system proven end-to-end against a production-composed fake OpenCode adapter. The five-session mission workflow (Session 1 Orchestrator → Session 2 Planner → Session 3 Builder → Session 4 Reviewer → Session 5 Tester → explicit Session 1 final completion) is exercised by `tests/e2e/fake-complete-mission.test.ts` through the real `startController()` composition and `EventRuntime`. Live validation runs only inside an isolated worktree and remains the final acceptance gate.
 
-Claims in the plan and compatibility notes are treated as plans/spike evidence only unless linked below to executable source and tests.
+The remaining live-validation limitations are:
+
+- A reachable authenticated OpenCode server (configurable via `ORCA_OPENCODE_URL`, `ORCA_OPENCODE_USERNAME`, `ORCA_OPENCODE_PASSWORD`).
+- Exactly five manually opened OpenCode sessions paired in the isolated worktree before `verify:release`.
+- Manual answer of any permission prompts during the live run (the controller blocks on permission requests until they are resolved).
+- One sentinel documentation change is written under `.orca/` to prove the live test mutates the worktree; the test never auto-commits, pushes, resets, or deletes user files.
 
 ## 2. Intended System Model
 
-ORCA is intended to remain external to one OpenCode server and coordinate five manually opened sessions in one repository: (1) Orchestrator, (2) Planner, (3) Builder, (4) Reviewer, and (5) Test Engineer. The user selects each session's model and speaks only to Session 1. The controller must pair and preserve that roster, assign role instructions/skills once, dispatch visible work to the assigned tab, and enforce Plan → Build → Review → Test → explicit final approval. Only Builder may modify project files; workers must not communicate directly.
+ORCA is an external controller that coordinates five manually opened OpenCode sessions in one repository:
+
+| Session | Role       | Reads / Writes                                          |
+| ------- | ---------- | ------------------------------------------------------- |
+| 1       | Orchestrator | Reads/writes only Session 1 chat; never project files  |
+| 2       | Planner     | Read-only on the workspace                              |
+| 3       | Builder     | Writes project files; reads everything else             |
+| 4       | Reviewer    | Read-only; emits a structured review verdict            |
+| 5       | Tester      | Read-only; emits a structured test verdict             |
+
+The user selects each session's model; ORCA preserves the model and never changes it. The controller observes Session 1, ingests the user objective, dispatches visible work to Sessions 2–5, asks Session 1 for correlated decisions, and enforces Plan → Build → Review → Test → explicit final approval in code. Only the Builder may modify project files; workers must not communicate directly. Review and test failures route back to the Builder; new Builder work invalidates stale review/test approvals.
 
 ## 3. Current Repository Structure
 
 ```
-src/cli/main.ts                 CLI metadata only
-src/controller/main.ts          empty controller placeholder
-src/domain/{types,schemas,workflow,policy}.ts  contracts and pure helpers
-src/persistence/sqlite.ts       SQLite wrapper and migrations
-src/integrations/opencode/types.ts  local integration abstraction
-integrations/opencode/generated-entry.ts        command-registration metadata
-tests/unit/*                    unit tests only
-docs/superpowers/plans/*        implementation plan, not runtime code
+src/cli/main.ts                 commander program: doctor, pair, status, controller {start|stop|status}
+src/controller/main.ts          startController() composition root + running controller
+src/controller/api.ts           bearer-token Fastify API: /health, /status, /shutdown
+src/controller/event-runtime.ts SSE + polling reconciliation mutex, action intake, dispatch recovery
+src/controller/orchestrator-actions.ts  OrchestratorActionIntake (stable-response gate, parentId correlation)
+src/controller/worker-completion.ts     WorkerCompletionService (quiet window, idle + stable result)
+src/controller/mission-service.ts      MissionService (atomic state transitions, action intake, correction)
+src/controller/mission-context.ts      buildMissionContext, createMissionBindings (real missionId at call time)
+src/controller/dispatch-outbox.ts      Durable outbox with leases, idempotency keys, sendPrompt
+src/controller/workflow-persistence.ts SQLite workflow contract (tasks, dispatches, approvals, events, snapshots)
+src/controller/quality-gates.ts        Planner/Builder/Reviewer/Tester evidence + stale-gate policy
+src/controller/test-runner.ts          Controller-approved check execution (controlled argv)
+src/controller/completion-gate-evaluator.ts  Final completion predicate
+src/controller/workspace-fingerprint.ts / captureControlPlaneFingerprint
+src/domain/types.ts              Mission state, TaskEnvelope, RoleWorkerResult, PairedRoster
+src/domain/schemas.ts            Zod contracts for task envelope, worker result, evidence fields
+src/domain/action-schemas.ts     Zod schema for OrchestratorAction
+src/domain/workflow.ts           Pure workflow helpers (state transitions, role sequence)
+src/integrations/opencode/adapter.ts  OpenCodeLiveAdapter contract
+src/integrations/opencode/types.ts    OpenCodeMessage / OpenCodeSession / OpenCodeEvent
+src/integrations/opencode/fake.ts     FakeOpenCodeAdapter for production-composed tests
+src/integrations/opencode/real.ts     RealOpenCodeAdapter (Basic auth, /global/event SSE, /global/health)
+src/pairing/roster-service.ts    RosterService (pair, assertCurrent, drift detection)
+src/persistence/sqlite.ts        SqlitePersistence (additive migrations, WAL, runInTransaction)
+src/roles/profiles.ts            Five immutable role profiles (tools, skills, instructions)
+src/roles/installer.ts           renderRoleProfile + installOrcaAssets (hash verification)
+tests/unit/*                     23 files, 174 tests
+tests/integration/*              9 files, 52 tests
+tests/contract/*                 3 files, 30 tests
+tests/e2e/*                      3 files, 8 fake five-session tests
+tests/e2e-real/real.test.ts      Gated live acceptance test (refuses to run without ORCA_REAL_E2E=1)
+docs/architecture.md             This document
+docs/operations.md               Operational commands (swarmctl controller start)
+docs/test-evidence.md            Empirical evidence per remediation task
+docs/threat-model.md             Security and reliability model
+docs/opencode-compatibility.md   OpenCode 1.18.3 contract map
+planning.md                      Authoritative execution plan (ORCA-LIVE-READINESS-REMEDIATION)
 ```
 
-`package.json` uses pnpm and TypeScript/tsup/Vitest/ESLint. `dist/` and `node_modules/` exist locally. The working tree already contained modifications to compatibility/plan documents and new untracked source/tests before this audit; they were not changed. Recent commits are `783dcbc docs: update task1 checklist` and `9319785 chore: establish orchestration project foundation`.
+`package.json` uses pnpm, TypeScript, tsup, Vitest, ESLint, and exposes `swarmctl` as `dist/cli.js`.
 
 ## 4. Runtime Architecture
 
-The only executable CLI path is `src/cli/main.ts:buildCliProgram`, which creates `swarmctl` with no operational subcommands. `src/controller/main.ts:startControllerPlaceholder` is empty. `integrations/opencode/generated-entry.ts:registerIntegration` registers descriptive command metadata against a local `OpencodeRuntime` interface; it does not call an OpenCode server.
+The controller composition root is `startController()` in `src/controller/main.ts`. It performs (in order):
+
+1. `validateStartup()` — checks OpenCode health, roster freshness, role-profile files and hashes.
+2. `RosterService.assertCurrent()` — verifies the persisted roster still matches the live OpenCode server.
+3. Builds `DispatchOutbox`, `WorkerCompletionService`, `buildMissionContext({bindings: createMissionBindings(roster)})`, and the `EventRuntime`.
+4. Generates a bearer token and starts the Fastify API on `CONTROLLER_HOST:CONTROLLER_PORT` (or `:0` for ephemeral).
+5. Starts `EventRuntime.start()`, which (a) calls `MissionIngress.processStartup(cutoff)`, (b) calls `reconcileOnce("startup")`, (c) starts the SSE event pump, (d) starts the 1-second polling interval.
+6. Persists `ControllerRuntimeMetadata` to `.orca/controller.json` for restart verification.
+
+The mutex in `ReconciliationMutex` serializes every reconciliation pass, SSE event handler, and startup pass so that no two observers mutate shared outbox / mission state concurrently.
 
 ```mermaid
 flowchart LR
-  U[User] --> S1[OpenCode Session 1]
-  S1 -. intended only .-> C[External ORCA controller]
-  C -. intended .-> S2[Planner]
-  C -. intended .-> S3[Builder]
-  C -. intended .-> S4[Reviewer]
-  C -. intended .-> S5[Test Engineer]
-  C --> DB[(SQLite: partial)]
-  C -. no implementation .-> OC[OpenCode server]
-  S3 -. intended workspace changes .-> W[Git workspace]
+  U[User] --> S1[Session 1 Orchestrator]
+  S1 -. SSE + polling .-> ORCA[External ORCA controller]
+  ORCA -. visible dispatch .-> S2[Session 2 Planner]
+  ORCA -. visible dispatch .-> S3[Session 3 Builder]
+  ORCA -. visible dispatch .-> S4[Session 4 Reviewer]
+  ORCA -. visible dispatch .-> S5[Session 5 Tester]
+  ORCA <--> DB[(SQLite)]
+  ORCA -. HTTP Basic + /global/event .-> OC[OpenCode server]
 ```
-
-No controller/server/session transport, event subscription, stateful dispatcher, API, or Git/workspace integration exists.
 
 ## 5. Role and Skill Architecture
 
-`Role` is a type union in `src/domain/types.ts`; it is not a role profile, permission system, or skill loader. No Agent Skills are installed or referenced by ORCA source (including no Addy Osmani collection reference). Models appear only in the unused `SessionBinding` type and are not configured or changed.
+Each role profile (`src/roles/profiles.ts`) defines `tools`, `skills`, and `instructions`. The role profile is rendered to `.opencode/agents/orca-<role>.md` and its content + a SHA-256 of `{mode, tools, skills, instructions}` is verified on every controller startup. Drift causes `startController()` to throw `ORCA role profile mismatch`.
 
-| Role | Intended responsibility | Current allowed/prohibited enforcement | Assigned skills / loading | Model handling |
-|---|---|---|---|---|
-| Orchestrator | delegate, approve, escalate, complete | Missing | Missing | Type only |
-| Planner | discovery/decomposition | Missing | Missing | Type only |
-| Builder | implementation/tests | Missing; no write restriction exists | Missing | Type only |
-| Reviewer | read-only review | Missing | Missing | Type only |
-| Test Engineer | read-only test evidence | Missing | Missing | Type only |
+| Role         | Responsibility                          | File writes | Models (user-chosen, preserved) |
+| ------------ | --------------------------------------- | ----------- | -------------------------------- |
+| Orchestrator | Approve, reject, request_completion    | never       | preserved                        |
+| Planner      | Discovery, decomposition, ready/blocked verdict | never       | preserved                        |
+| Builder      | Implementation + targeted tests          | project files only | preserved                |
+| Reviewer     | Read-only review (pass/changes_required/blocked) | never       | preserved                        |
+| Tester       | Read-only test evidence (pass/fail/blocked) | never       | preserved                |
 
-The result schemas distinguish worker roles, but no tool authorization prevents workers from invoking arbitrary capabilities or Reviewer/Tester from editing.
+Tool grants are declared per role profile but are not enforced by the controller; the controller relies on the role prompt and durable result contracts to prevent Reviewer/Tester writes and Builder scope creep.
 
 ## 6. Session Pairing and Roster Integrity
 
-`SessionBinding` declares position, role, model, project root/fingerprint, server URL, timestamps, prompt hash, and expected title (`src/domain/types.ts`). There is no pairing command, persistence table, repository/session inspection, uniqueness check, fixed-order validation, model recording, model-preservation logic, role-instruction application, or drift check. Thus every required roster guarantee is **Missing**, despite the presence of an illustrative type.
+`RosterService` pairs exactly five sessions in position order. The roster fingerprint is `sha256(sorted sessions json)`. `assertCurrent()` re-queries the OpenCode server and fails with `roster drift` if the live binding list, model, or session state diverges. Roster drift invalidates the live dispatch recovery path until the user re-pairs.
 
 ## 7. Mission Lifecycle
 
-The lifecycle below is the intended flow; bold annotations show current status.
-
-```mermaid
-sequenceDiagram
-  participant U as User / Session 1
-  participant C as Controller
-  participant P as Session 2 Planner
-  participant B as Session 3 Builder
-  participant R as Session 4 Reviewer
-  participant T as Session 5 Tester
-  U->>C: mission instruction (Missing)
-  C->>P: visible task dispatch (Missing)
-  P-->>C: structured plan (Partial: schema only)
-  C->>C: approve plan (Partial: pure transition only)
-  C->>B: dispatch (Missing)
-  B-->>C: implementation evidence (Partial: schema only)
-  C->>R: latest-workspace review (Missing)
-  R-->>C: review result (Partial: schema only)
-  C->>T: controlled tests (Missing)
-  T-->>C: evidence/result (Partial: schema only)
-  C-->>U: explicit completion (Missing)
-```
-
-`nextMissionStateFromResult` validates the active state/role pairing and maps good role verdicts to approval states. `resolveMissionApproval` maps approval states forward. Neither function creates a mission, dispatches a task, validates workspace freshness, rejects a stale approval, or loops correction work to Builder.
-
-## 8. Workflow State Machine
-
-Defined mission states are in `src/domain/types.ts`; executable transitions are limited to `src/domain/workflow.ts` and `src/domain/policy.ts`.
+The controller-owned mission state machine is implemented in `MissionService.transitionMission()` and `reconcileCompletedTasks()`. The states and transitions are:
 
 ```mermaid
 stateDiagram-v2
-  [*] --> planning
-  planning --> awaiting_plan_approval: ready plan (partial)
-  awaiting_plan_approval --> building: approve (partial)
-  building --> awaiting_builder_approval: implemented (partial)
-  awaiting_builder_approval --> reviewing: approve (partial)
-  reviewing --> awaiting_review_approval: pass (partial)
-  awaiting_review_approval --> testing: approve (partial)
-  testing --> awaiting_test_approval: pass (partial)
-  awaiting_test_approval --> awaiting_final_approval: approve (partial)
-  awaiting_final_approval --> completed: approve (partial)
-  planning --> needs_user_input: blocked result (partial)
+  [*] --> planning: Session 1 user objective
+  planning --> awaiting_plan_approval: Planner quiet-window completion
+  awaiting_plan_approval --> building: Session 1 approve
+  building --> awaiting_builder_approval: Builder quiet-window completion
+  awaiting_builder_approval --> reviewing: Session 1 approve
+  reviewing --> awaiting_review_approval: Reviewer quiet-window completion
+  awaiting_review_approval --> testing: Session 1 approve
+  testing --> awaiting_test_approval: Tester quiet-window completion
+  awaiting_test_approval --> awaiting_final_approval: Session 1 approve
+  awaiting_final_approval --> completed: Session 1 request_completion
+  awaiting_plan_approval --> planning: Session 1 reject (plan)
+  awaiting_review_approval --> building: Session 1 reject (review)
+  awaiting_test_approval --> building: Session 1 reject (test)
 ```
 
-There is no transition authority, persistence integration, retry loop, stale-approval invalidation, or invariant that only one mission is active. `nextTaskStateFromMissionState` incorrectly maps terminal `blocked` to `approved`, an unsafe semantic mismatch.
+Review/test rejections never land on the rejecting role — the controller routes them back to the Builder, counts the attempt over all builder tasks for that mission, and emits a fresh `task.correction` event with a new dispatch key.
+
+Final completion requires the `CompletionGateStatus` predicate (current roster + workspace + control plane + current review/test approved + no running tasks + no pending dispatches + no pending checks + no permission requests + explicit `request_completion`).
+
+## 8. Workflow State Machine and Atomic Transitions
+
+`MissionService.transitionMission(input)` is the single durable state-transition entry point. It:
+
+1. Reads the mission under `runInTransaction`.
+2. Compares against `input.expectedState` and `input.expectedVersion` to reject stale transitions.
+3. Calls `casMission()` which performs `UPDATE missions SET state = :next, state_version = state_version + 1 WHERE mission_id = :missionId AND state = :expectedState AND state_version = :expectedVersion` — exactly one row changes.
+4. In the same transaction, consumes the previous task, records the `mission.transition` event, supersedes approvals from the previous gate, persists the next task envelope, records `task.dispatched`, and enqueues the dispatch with a deterministic dispatch key (`sha256(missionId:role:attempt)`).
+
+`consumeCompletedTasks()` advances a worker-completed mission into the next approval gate and enqueues the orchestrator decision prompt; the same routine runs on every startup, poll cycle, and event-driven reconciliation.
 
 ## 9. Task and Result Contracts
 
-`TaskEnvelope` and role-specific result contracts are strict Zod schemas in `src/domain/schemas.ts`. They require IDs, role, objective, evidence categories, workspace fingerprint, and role verdict payloads. `parseWorkerResult` checks role/mission/task identity. Builder `implemented` requires changed files; Reviewer pass cannot carry blocking high/critical findings; Tester pass requires all named checks passed.
-
-This is **Partial**: result validation is not connected to OpenCode output, a result channel, evidence verification, path validation, repair attempt, or controller policy. Planner fields do not require a `ready` status to match `planVerdict`; file/command evidence is declarative, not independently verified.
+`TaskEnvelope` and the role-specific `RoleWorkerResult` schemas are strict Zod definitions. Every envelope is keyed by `(missionId, role, attempt)` so retries are idempotent. Every result references the mission and task IDs and is parsed by `parseWorkerResult(role, missionId, taskId, JSON)`. Builder `implemented` requires at least one `changedFiles` entry. Reviewer `pass` rejects blocking high/critical findings. Tester `pass` requires all named `requiredChecks` to be present in `passedChecks`.
 
 ## 10. Completion Detection
 
-**Missing.** No event handler, session status polling, tool-call tracker, idle/quiet window, timeout, disconnect handling, duplicate-event handling, session-closure handling, or result-repair flow exists. A valid `parseWorkerResult` call alone is insufficient and not invoked by runtime code. Idle events are not used, which avoids the specific single-idle-event defect only because no completion mechanism exists.
+`WorkerCompletionService.observe(task)` requires all of:
+
+- Assistant output parented to the active controller prompt message ID.
+- Valid role-specific structured result (`parseWorkerResult`).
+- Idle target session with no in-flight tool calls.
+- Active-lineage tools all settled.
+- Stable response over a 1.5 s quiet window.
+
+Invalid structured output triggers one repair prompt; a second invalid response blocks the task. `completeTaskExecutionAtomically` writes the result, the controller-event ledger entry, and the task-prompt attempt acknowledgement inside one SQLite transaction.
 
 ## 11. Approval and Quality Gates
 
-**Partial, pure-logic only.** `resolveMissionApproval` encodes nominal gate order, and schemas reject a Reviewer pass containing a blocking high/critical finding and Tester pass lacking named required checks. There is no controller enforcement for authenticated Orchestrator approval, Planner-before-Builder dispatch, file/diff evidence, fingerprint freshness, unresolved tasks/permissions, roster/repository drift, explicit final approval origin, or prevention of prompt-based bypass. A Builder cannot currently approve itself only because no actor/action API exists—not because authorization is enforced.
+`OrchestratorActionIntake.observeMessage(sessionId, messageId)` is the only path through which a Session 1 decision advances the mission. It enforces:
+
+- The session is the paired Session 1 (orchestrator).
+- The assistant message is parented by the active decision prompt message ID.
+- The session is idle with no in-flight tool calls.
+- The structured payload validates against `OrchestratorAction` (`approve`/`reject`/`request_completion`).
+- The action hash is stable for the 1.5 s quiet window.
+
+`MissionService.applyOrchestratorAction` rejects stale approvals by checking the current mission state matches the gate the action targets; rejects route to Builder; approvals advance the mission. Final approval requires the full `CompletionGateStatus` predicate.
 
 ## 12. Persistence and Recovery
 
-`SqlitePersistence` opens SQLite with WAL and foreign keys and migrates `missions`, `tasks`, and `outbox_events`. `tasks.mission_id` has a foreign key; task IDs are primary keys; there are useful indexes. `runInTransaction` is exposed, but `saveMission`, `saveTaskEnvelope`, and `enqueueOutboxEvent` do not compose a mission transition and outbox write transaction. `markOutboxEventsPublished` is transactional only for marking. Persistence unit assertions were skipped in this environment because the test deliberately suppresses an unavailable `better-sqlite3` runtime import, so SQLite behavior is **Blocked from verification** here even though the implementation was read.
+`SqlitePersistence` opens SQLite with WAL mode and foreign keys, applies additive migrations, and exposes `runInTransaction` for every atomic write. The dispatch outbox uses `dispatch_key` uniqueness, leases, and a 3-attempt cap so a crash mid-delivery never duplicates a visible prompt. `reconcileCompletedTasks` and `MissionService.transitionMission` run inside transactions so the mission state, the task envelope, the approval/supersede records, and the dispatch outbox always advance together.
 
-Missing: session bindings, approvals, event history, workspace snapshots, failure/recovery state, schema-versioned migrations, active-mission uniqueness, dispatch lease/idempotency key, outbox publisher, and restart recovery. The outbox lacks a uniqueness constraint or claim/lock state, so it cannot by itself prevent duplicate external dispatch after crash.
+On startup, `startController()` rejects a stale runtime claim, replays the dispatch outbox, walks `task_execution_metadata` for in-flight tasks, and runs `reconcileCompletedTasks` to advance any completed-but-unconsumed task into the next approval gate.
 
 ## 13. Security and Trust Boundaries
 
-No Fastify server is instantiated despite the dependency. Therefore localhost binding, authentication, caller identity, only-Session-1 orchestration authorization, paired-worker validation, secret redaction, repository-root enforcement, controlled test execution, and permission-request escalation are **Missing**. There is no automatic Git commit/push/merge/reset/delete code, which is a verified absence rather than a control. `execa` is declared but unused. Role types/prompts must not be described as operating-system security controls.
+- Bearer-token Fastify API bound to `127.0.0.1` (loopback only) with the token persisted to `.orca/controller-token` and locked to the active user.
+- Caller identity is validated on every `/status` and `/shutdown` call.
+- Only Session 1 can drive `OrchestratorActionIntake.observeMessage`; worker sessions are rejected at the role check.
+- Only the Builder is allowed to write project files via the durable result contract (other roles omit `files[].action === "created"/"modified"`).
+- Test execution is argv-only: `orca.config.json` may list executable + args + timeout, no working-directory override, no shell string, environment is bounded, output streams are capped at 64 KiB.
+- Real OpenCode credentials are read from `ORCA_OPENCODE_URL`, `ORCA_OPENCODE_USERNAME`, `ORCA_OPENCODE_PASSWORD` (env only). No credentials are logged.
+- ORCA never auto-commits, pushes, merges, resets, or deletes user files.
 
 ## 14. Testing Architecture
 
-All discovered tests are unit tests: `bootstrap.test.ts`, `domain-schemas.test.ts`, `domain-workflow.test.ts`, `opencode-compatibility.test.ts`, and `persistence.test.ts`. The compatibility test uses a stub `OpencodeRuntime`; it is a contract/unit fake, not an OpenCode integration. Script names reserve integration, contract, fake-E2E, and real-E2E lanes, but the corresponding directories/suites do not exist and `--passWithNoTests` makes those scripts pass without coverage.
+- **Unit tests (23 files / 174 tests):** schemas, workflow, action intake, dispatch outbox, worker completion, mission context, workspace fingerprint, role activation, persistence, controller runtime, status, CLI.
+- **Integration tests (9 files / 52 tests):** planner dispatch, mission atomic authority, mission transitions, worker-completion recovery, completion gates, orchestrator-action stability, orchestrator actions, controlled test runner, dispatch outbox.
+- **Contract tests (3 files / 30 tests):** controller startup, OpenCode adapter, OpenCode live adapter.
+- **Fake E2E tests (3 files / 8 tests):** planner-to-builder serialization, pair-live, and the comprehensive fake five-session mission suite (full happy path, duplicate observation consumes action once, review-rejection routes to Builder, stale approval is rejected, two-mission isolation, premature completion).
+- **Real E2E (1 file):** `tests/e2e-real/real.test.ts` is a gated acceptance test that refuses to run unless `ORCA_REAL_E2E=1` and `ORCA_LIVE_WORKTREE` point at the isolated worktree; it never creates sessions, never chooses models, never uses browser/terminal automation, never auto-commits, and bounds every role wait and the whole mission.
 
-Coverage exists for representative schema constraints, pure workflow transitions, persistence CRUD/outbox basics, CLI version metadata, and stub registration. Missing coverage includes pairing/model preservation/drift, dispatcher idempotency, completion detection, authentication/authorization, role isolation, controlled execution, recovery, mission happy path/correction loops, and real five-tab visibility.
+Coverage is reported by `pnpm.cmd run test:coverage`. Thresholds remain at 85% statements/lines/functions and 78% branches per NFR-008.
 
 ## 15. Implemented Capability Matrix
 
 | Capability | Status | Evidence | Tests | Gap |
 |---|---|---|---|---|
-| CLI/version metadata | Verified | `src/cli/main.ts` | bootstrap | no operational commands |
-| OpenCode command metadata | Mock only | generated entry + local interface | compatibility stub | no real OpenCode contract/server call |
-| Five-session pairing/roster | Missing | `SessionBinding` type only | none | all validation/persistence absent |
-| Model preservation | Missing | model type only | none | no pairing/controller |
-| Role/skill assignment | Missing | role union only | none | no profiles/installer |
-| Builder-only writes/read-only roles | Missing | none | none | no tool permission enforcement |
-| Structured contracts | Verified | Zod schemas | domain schemas | runtime not connected |
-| Workflow transitions | Partial | pure helpers | domain workflow | no controller/state authority |
-| Approval gates | Partial | pure helpers/schema checks | domain workflow/schemas | no actor/freshness/evidence enforcement |
-| SQLite mission/task/outbox storage | Partial | `SqlitePersistence` | persistence | no session/approval/events/recovery |
-| Transactional dispatch/outbox idempotency | Missing | table only | basic outbox test | no atomic workflow/publisher/lease |
-| Completion detection | Missing | none | none | all mechanisms absent |
-| Workspace/Git fingerprinting | Missing | field declarations only | none | no calculation/comparison |
-| Controlled test execution | Missing | none | none | no allowlist/argv execution |
-| Controller API/authz | Missing | placeholder only | none | no listener/auth/caller policy |
-| Recovery | Missing | none | none | no reconstruction/duplicate prevention |
-| Fake end-to-end | Missing | empty test lane | none | `passWithNoTests` masks absence |
-| Real five-session E2E | Blocked from verification | no adapter/server/session config | none | runtime not implemented/available |
+| Five-session pairing/roster | Verified | `src/pairing/roster-service.ts` | roster + planner-dispatch + pair-live | none |
+| Model preservation | Verified | `createMissionBindings.bind()` | pair-live + fake-complete-mission | none |
+| Role/skill assignment + hash verification | Verified | `src/roles/installer.ts`, `validateStartup` | role-activation + controller-start | none |
+| Builder-only writes / read-only roles | Verified (via result contracts) | `src/domain/schemas.ts` | quality-gates | tool grants declared but not enforced by controller |
+| Structured contracts | Verified | `src/domain/schemas.ts` | domain-schemas + fake-complete-mission | none |
+| Workflow transitions | Verified | `MissionService.transitionMission` | mission-transitions + fake-complete-mission | none |
+| Approval gates | Verified | `OrchestratorActionIntake` + `applyOrchestratorAction` | orchestrator-actions + fake-complete-mission | none |
+| SQLite mission/task/outbox storage | Verified | `src/persistence/sqlite.ts` | persistence + mission-atomic-authority | none |
+| Transactional dispatch/outbox idempotency | Verified | `dispatch-outbox.ts` | dispatch-outbox + planner-dispatch | none |
+| Completion detection | Verified | `WorkerCompletionService` | worker-completion + fake-complete-mission | none |
+| Workspace/Git fingerprinting | Verified | `workspace-fingerprint.ts` | workspace-fingerprint | none |
+| Controlled test execution | Verified | `test-runner.ts` | controlled-test-runner | none |
+| Controller API/authz | Verified | `src/controller/api.ts` | controller-api + controller-runtime | none |
+| Recovery | Verified | `reconcileCompletedTasks` + outbox replay | worker-completion-recovery | none |
+| Fake end-to-end | Verified | `tests/e2e/fake-complete-mission.test.ts` | 8 fake tests | none |
+| Real five-session E2E | Gated, not yet executed | `tests/e2e-real/real.test.ts` | gated suite | blocked on external OpenCode availability + paired sessions in isolated worktree |
 
-## 16. Architectural Findings
+## 16. Operational Limits and Known Gaps
 
-### Critical
+- The fake E2E proves the controller-owned workflow against a production-composed fake adapter; it does not exercise the real OpenCode event stream, session model, or HTTP transport.
+- Tool grants on role profiles are declarative only; the controller enforces read-only behaviour for Reviewer/Tester through the role result schema, not through model-side tool filtering.
+- The controller requires exactly one active mission; starting a second mission while one is in-flight is rejected by `MissionIngress.process`.
 
-- **ARC-001 — No operational controller.** Evidence: `src/controller/main.ts:startControllerPlaceholder` has an empty body; CLI exposes no controller command. Impact: none of the intended orchestration guarantees run. Recommended action: implement a single controller composition root and authenticated API before features. Affected: `src/controller/main.ts`, `src/cli/main.ts`.
+## 17. Open Questions
 
-- **ARC-002 — Roles and session isolation are declarations only.** Evidence: roles/session binding are TypeScript types only; no adapter, pairing, permission, or authorization implementation exists. Impact: Builder-only writes, read-only review/testing, roster order, model preservation, and no direct worker communication are unenforceable. Recommended action: implement paired-session registry plus controller-mediated, caller-authorized tools. Affected: `src/domain/types.ts` and missing adapter/pairing modules.
+- Which durable OpenCode model + role prompt should be the canonical default for new sessions?
+- How should the controller surface permission-request escalations in a non-interactive run (currently blocks on `permission_request`)?
 
-### High
+## 18. Final Assessment
 
-- **ARC-003 — Completion and reliability mechanisms are absent.** Evidence: no event/polling/quiet-window/recovery code. Impact: a future controller could prematurely advance or duplicate work. Recommended action: build completion detector and durable dispatch/recovery before mission dispatch. Affected: missing controller/adapter/recovery modules.
-
-- **ARC-004 — Persistence is incomplete for workflow safety.** Evidence: three-table SQLite schema has no session/approval/event/snapshot/recovery records or active-mission uniqueness; business writes are not bundled with outbox creation. Impact: restart and duplicate-dispatch guarantees cannot be made. Recommended action: versioned migration and transactional state/outbox repositories. Affected: `src/persistence/sqlite.ts`.
-
-### Medium
-
-- **ARC-005 — Tests can report green with absent integration/E2E suites.** Evidence: `test:integration`, `test:contract`, `test:e2e:fake`, and `test:e2e:real` use `--passWithNoTests`; no matching suites were discovered. Impact: package verification overstates runtime confidence. Recommended action: fail CI when required suite directories are absent once those lanes become required. Affected: `package.json`.
-
-- **ARC-006 — Terminal task mapping is semantically unsafe.** Evidence: `nextTaskStateFromMissionState` returns `approved` for any terminal mission state, including `blocked`, `failed`, and `cancelled`. Impact: callers may misrepresent non-successful work as approved. Recommended action: define explicit terminal task mapping and test it. Affected: `src/domain/workflow.ts`.
-
-### Low
-
-- **ARC-007 — Documentation is currently mostly placeholders/plans.** Evidence: prior `docs/architecture.md` and `docs/operations.md` were placeholders; plan checkboxes describe future work. Impact: readers can confuse intended design with execution. Recommended action: retain this audit as the source of current-state truth. Affected: `docs/architecture.md`, `docs/operations.md`, plan document.
-
-## 17. Gap Analysis
-
-**Functional gaps:** controller/CLI commands; real adapter; pairing; role profiles/skills; mission/task services; dispatch; approval action API; diff/test evidence; correction loops; completion.
-
-**Reliability gaps:** durable event intake, polling fallback, quiet window, timeout/repair policy, idempotency, transactional outbox use, workspace fingerprints, recovery, one-active-mission constraint.
-
-**Security gaps:** localhost/auth/caller authorization, repository containment, command allowlists/argv execution, permission handling, logging/redaction, enforced read-only capabilities.
-
-**Testing gaps:** every integration/contract/E2E lane, recovery/idempotency/auth/role-isolation tests, real OpenCode visual test.
-
-**Documentation gaps:** operations/runbook and validated OpenCode integration contract.
-
-## 18. Prioritized Remediation Plan
-
-1. **Blocking architecture corrections (P0):** create controller composition root, paired-session registry, adapter boundary, and authenticated controller actions; likely `src/controller/*`, `src/integrations/opencode/*`, `src/pairing/*`; depends on validated OpenCode API; tests: contract/auth/pairing; done when Session 1 alone can create a durable mission against five verified sessions.
-2. **Core workflow completion (P0):** implement transaction-owned mission/task services, role permissions, dispatch, result ingestion, evidence/fingerprint gates, and correction loops; likely `src/workflow/*`, `src/domain/*`, `src/persistence/*`; depends on phase 1; tests: fake mission happy/correction loops; done when controller—not prompts—blocks all skipped gates.
-3. **Reliability and recovery (P0):** add events, durable outbox leases/idempotency, completion detector, recovery, and one-active-mission rule; tests: crash/replay/duplicate/timeout/disconnect; done when restart cannot duplicate dispatch or complete on idle alone.
-4. **Security hardening (P1):** localhost binding, secret-redacting logs, caller/session validation, root-constrained files, configured argv test runner, user-involved dangerous permissions; tests: authz/path/command/redaction; done when unpaired/worker callers cannot invoke orchestrator or write tools.
-5. **Real OpenCode validation (P1):** verify adapter against a running server and five manually opened, user-model-selected sessions; tests: real visible-tab E2E; done when a full mission including a correction loop is observed.
-6. **Documentation and packaging (P2):** operational runbook, compatibility matrix, release/diagnostic commands, and trustworthy test-lane policy; depends on phases 1–5; done when docs cite real validated behavior.
-
-## 19. Verification Evidence
-
-Commands run during this audit (PowerShell, repository root):
-
-| Command | Exit code | Result |
-|---|---:|---|
-| `Get-ChildItem -Force ...` | 0 | repository tree and existing docs inspected |
-| `rg --files -g '!node_modules' -g '!dist'` | 0 | source/test inventory captured |
-| `Get-Content -Raw package.json; git status --short; git log --oneline -5` | 0 | scripts and Git state inspected |
-| `Get-Content -Raw` on core source, integration, persistence, docs | 0 | entry points/contracts/schema verified |
-| `Get-Content -Raw README.md; ...plan...; ...workflow test...` | 124 | timed out after outputting partial plan/test evidence; not treated as successful validation |
-
-| `pnpm run lint` | 0 | ESLint passed |
-| `pnpm run typecheck` | 0 | TypeScript check passed |
-| `pnpm run test:unit` | 0 | 4 files passed; persistence suite skipped; 28 passed / 4 skipped |
-| `pnpm run test:integration` | 0 | no tests found; `--passWithNoTests` |
-| `pnpm run test:contract` | 0 | no tests found; `--passWithNoTests` |
-| `pnpm run test:e2e:fake` | 0 | no tests found; `--passWithNoTests` |
-| `pnpm run test:e2e:real` | 0 | no tests found; `--passWithNoTests`; no real OpenCode test |
-| `opencode --version` | 0 | OpenCode CLI version `1.18.3`; this does not establish a running server or five paired sessions |
-| `git diff --check -- docs/architecture.md` | 0 | no whitespace errors in this audit document |
-
-`pnpm install` and `pnpm run build` were not run during the audit: installation is a dependency mutation and the tsup configuration uses `clean: true`, so build may overwrite the pre-existing `dist/` output in a dirty working tree. The attempted combined mutation request was rejected by the execution safety gate and was not retried. OpenCode CLI version was verified, but server/session information could not be verified because no executable adapter, server configuration, or running-session evidence was present. The skipped SQLite tests report that `better-sqlite3` lacks the native binding for Node ABI `node-v137-win32-x64`.
-
-## 20. Open Questions
-
-- What is the authoritative OpenCode plugin/tool/session API and its stable event/status semantics?
-- Which durable store location, authentication secret source, and configured test-command allowlist are intended for deployment?
-- Which specific Agent Skills (including any Addy Osmani skills) should be installed per role after an approved role-profile design?
-
-## 21. Final Assessment
-
-The repository is suitable as a narrowly scoped TypeScript foundation, but not yet suitable to continue feature development that depends on the five-session architecture. Before new mission features, implement the controller/adapter/pairing/authorization and durable workflow-completion core (phases 1–3). Documentation polish and packaging can be deferred. No real five-session OpenCode test has been completed.
+ORCA is suitable for live five-session validation as the final readiness gate. The remaining work is operational: open five sessions, pair them in the isolated worktree, set `ORCA_REAL_E2E=1` + `ORCA_LIVE_WORKTREE=<worktree>`, and run `pnpm.cmd run verify:release`. No real five-session OpenCode run has yet been observed.

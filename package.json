@@ -20,7 +20,7 @@
     "test:e2e:real": "vitest run tests/e2e-real",
     "test:coverage": "vitest run --coverage",
     "verify:95": "pnpm run lint && pnpm run typecheck && pnpm run build && pnpm run test:unit && pnpm run test:integration && pnpm run test:contract && pnpm run test:e2e:fake && pnpm run test:coverage",
-    "verify:release": "pnpm run verify:95 && pnpm run test:e2e:real",
+    "verify:release": "node scripts/verify-release.cjs",
     "verify": "pnpm run verify:95",
     "swarmctl": "node dist/cli.js"
   },
