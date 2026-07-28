@@ -69,12 +69,14 @@ describe("buildMissionContext", () => {
 });
 
 describe("createMissionBindings", () => {
+  const baseContext = { objective: "ship the release", sourceWorkspaceFingerprint: "fp-intake" };
+
   it("produces deterministic ids for the same mission", () => {
     const { roster } = setup();
     const a = createMissionBindings(roster);
     const b = createMissionBindings(roster);
-    const planner = a.nextTaskForRole("planner", "mission-1", 1);
-    const planner2 = b.nextTaskForRole("planner", "mission-1", 1);
+    const planner = a.nextTaskForRole("planner", "mission-1", 1, baseContext);
+    const planner2 = b.nextTaskForRole("planner", "mission-1", 1, baseContext);
     expect(planner.dispatchKey).toBe(planner2.dispatchKey);
     expect(planner.promptMessageId).toBe(planner2.promptMessageId);
     expect(planner.envelope.missionId).toBe("mission-1");
@@ -84,24 +86,50 @@ describe("createMissionBindings", () => {
   it("uses the supplied mission id rather than a placeholder", () => {
     const { roster } = setup();
     const bindings = createMissionBindings(roster);
-    const task = bindings.nextTaskForRole("builder", "mission-99", 1);
+    const task = bindings.nextTaskForRole("builder", "mission-99", 1, {
+      ...baseContext,
+      plannerEvidence: {
+        sourceTaskId: "task-planner",
+        planVerdict: "ready",
+        implementationSteps: ["step-1"],
+        expectedFiles: ["src/foo.ts"],
+        validationPlan: ["vitest run"],
+        acceptanceCriteria: ["implement plan"],
+        summary: "ship it",
+        sourceWorkspaceFingerprint: "fp-intake",
+        completedAt: new Date().toISOString()
+      }
+    });
     expect(task.envelope.missionId).toBe("mission-99");
     expect(task.envelope.taskId).toMatch(/^task-[a-f0-9]+$/);
     expect(task.dispatchKey).toMatch(/^dispatch-[a-f0-9]+$/);
+    expect(task.promptPayload.kind).toBe("worker_task");
+    expect(task.promptPayload.objective).toBe("ship the release");
   });
 
   it("rejects an empty mission id so a synthetic value cannot be used", () => {
     const { roster } = setup();
     const bindings = createMissionBindings(roster);
-    expect(() => bindings.nextTaskForRole("planner", "", 1)).toThrow(/mission id/);
+    expect(() => bindings.nextTaskForRole("planner", "", 1, baseContext)).toThrow(/mission id/);
     expect(() => bindings.nextDecisionPrompt("", "plan", "task-1")).toThrow(/mission id/);
   });
 
   it("produces distinct dispatch keys for two different missions", () => {
     const { roster } = setup();
     const bindings = createMissionBindings(roster);
-    const a = bindings.nextTaskForRole("builder", "mission-A", 1);
-    const b = bindings.nextTaskForRole("builder", "mission-B", 1);
+    const plannerEvidence = {
+      sourceTaskId: "task-planner",
+      planVerdict: "ready" as const,
+      implementationSteps: ["step-1"],
+      expectedFiles: ["src/foo.ts"],
+      validationPlan: ["vitest run"],
+      acceptanceCriteria: ["implement plan"],
+      summary: "ship it",
+      sourceWorkspaceFingerprint: "fp-intake",
+      completedAt: new Date().toISOString()
+    };
+    const a = bindings.nextTaskForRole("builder", "mission-A", 1, { ...baseContext, plannerEvidence });
+    const b = bindings.nextTaskForRole("builder", "mission-B", 1, { ...baseContext, plannerEvidence });
     expect(a.dispatchKey).not.toBe(b.dispatchKey);
     expect(a.envelope.taskId).not.toBe(b.envelope.taskId);
     expect(a.promptMessageId).not.toBe(b.promptMessageId);
@@ -111,7 +139,7 @@ describe("createMissionBindings", () => {
     const { roster } = setup();
     const bindings = createMissionBindings(roster);
     expect(() => bindings.bind("orchestrator")).not.toThrow();
-    expect(() => bindings.nextTaskForRole("planner", "mission-1", 1)).not.toThrow();
+    expect(() => bindings.nextTaskForRole("planner", "mission-1", 1, baseContext)).not.toThrow();
   });
 
   it("builds a deterministic orchestrator decision prompt per gate", () => {
@@ -127,5 +155,117 @@ describe("createMissionBindings", () => {
       expect(decision.dispatchKey).toBe(again.dispatchKey);
       expect(decision.promptMessageId).toBe(again.promptMessageId);
     }
+  });
+});
+
+describe("mission context propagation", () => {
+  const baseContext = { objective: "ship the release", sourceWorkspaceFingerprint: "fp-intake" };
+
+  it("blocks dispatch when a Builder task lacks planner evidence", () => {
+    const { roster } = setup();
+    const bindings = createMissionBindings(roster);
+    expect(() => bindings.nextTaskForRole("builder", "mission-1", 1, baseContext)).toThrow(/planner evidence/);
+  });
+
+  it("blocks dispatch when a Reviewer task lacks Builder evidence", () => {
+    const { roster } = setup();
+    const bindings = createMissionBindings(roster);
+    expect(() => bindings.nextTaskForRole("reviewer", "mission-1", 1, baseContext)).toThrow(/builder evidence/);
+  });
+
+  it("blocks dispatch when a Tester task lacks controller check evidence", () => {
+    const { roster } = setup();
+    const bindings = createMissionBindings(roster);
+    expect(() => bindings.nextTaskForRole("tester", "mission-1", 1, baseContext)).toThrow(/controller check evidence/);
+  });
+
+  it("blocks dispatch when the objective is empty", () => {
+    const { roster } = setup();
+    const bindings = createMissionBindings(roster);
+    expect(() => bindings.nextTaskForRole("planner", "mission-1", 1, { objective: "  ", sourceWorkspaceFingerprint: "fp-intake" })).toThrow(/objective/);
+  });
+
+  it("embeds planner evidence in the Builder prompt payload", () => {
+    const { roster } = setup();
+    const bindings = createMissionBindings(roster);
+    const task = bindings.nextTaskForRole("builder", "mission-1", 1, {
+      ...baseContext,
+      plannerEvidence: {
+        sourceTaskId: "task-planner",
+        planVerdict: "ready",
+        implementationSteps: ["step-1", "step-2"],
+        expectedFiles: ["src/foo.ts"],
+        validationPlan: ["vitest run"],
+        acceptanceCriteria: ["implement plan"],
+        summary: "ship it",
+        sourceWorkspaceFingerprint: "fp-intake",
+        completedAt: new Date().toISOString()
+      }
+    });
+    expect(task.promptPayload.plannerEvidence).toMatchObject({
+      sourceTaskId: "task-planner",
+      planVerdict: "ready",
+      implementationSteps: ["step-1", "step-2"]
+    });
+    expect(task.envelope.objective).toContain("ship the release");
+    expect(task.envelope.acceptanceCriteria.join("\n")).toContain("Touch expected file: src/foo.ts");
+  });
+
+  it("embeds builder evidence in the Reviewer prompt payload", () => {
+    const { roster } = setup();
+    const bindings = createMissionBindings(roster);
+    const task = bindings.nextTaskForRole("reviewer", "mission-1", 1, {
+      ...baseContext,
+      builderEvidence: {
+        sourceTaskId: "task-builder",
+        implementationVerdict: "implemented",
+        changedFiles: ["src/foo.ts"],
+        targetedTestsRun: ["vitest run tests/foo.test.ts"],
+        summary: "implemented foo",
+        findings: [],
+        sourceWorkspaceFingerprint: "fp-intake",
+        completedAt: new Date().toISOString()
+      }
+    });
+    expect(task.promptPayload.builderEvidence).toMatchObject({ changedFiles: ["src/foo.ts"] });
+    expect(task.envelope.objective).toContain("Builder summary: implemented foo");
+  });
+
+  it("embeds controller checks in the Tester prompt payload", () => {
+    const { roster } = setup();
+    const bindings = createMissionBindings(roster);
+    const task = bindings.nextTaskForRole("tester", "mission-1", 1, {
+      ...baseContext,
+      controllerChecks: {
+        configHash: "config-hash",
+        testedWorkspaceFingerprint: "fp-intake",
+        requiredChecks: ["noop"],
+        passedChecks: ["noop"],
+        failedChecks: [],
+        capturedAt: new Date().toISOString()
+      }
+    });
+    expect(task.promptPayload.controllerChecks).toMatchObject({ requiredChecks: ["noop"] });
+    expect(task.envelope.objective).toContain("Controller-generated check evidence");
+  });
+
+  it("embeds rejected findings and correction instructions in Builder correction tasks", () => {
+    const { roster } = setup();
+    const bindings = createMissionBindings(roster);
+    const task = bindings.nextTaskForRole("builder", "mission-1", 1, {
+      ...baseContext,
+      correction: {
+        rejectedRole: "reviewer",
+        rejectedVerdict: "changes_required",
+        rejectedFindings: [
+          { severity: "medium", title: "missing test", description: "add a test", blocking: true }
+        ],
+        correctionInstructions: ["add a regression test for foo"]
+      }
+    });
+    expect(task.promptPayload.correction).toMatchObject({ rejectedRole: "reviewer" });
+    expect(task.envelope.objective).toContain("Rejection source: reviewer");
+    expect(task.envelope.objective).toContain("missing test");
+    expect(task.envelope.objective).toContain("add a regression test for foo");
   });
 });

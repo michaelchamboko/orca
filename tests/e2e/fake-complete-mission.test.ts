@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -12,6 +12,8 @@ import { RosterService } from "../../src/pairing/roster-service.js";
 import { renderRoleProfile } from "../../src/roles/installer.js";
 import { roleProfiles } from "../../src/roles/profiles.js";
 import type { PairedRoster } from "../../src/domain/types.js";
+import { createControlledCheckExecutor, enqueueCheckIntents } from "../../src/controller/test-runner.js";
+import type { OrcaConfig } from "../../src/config/orca-config.js";
 
 const workspaces: string[] = [];
 const controllers: Array<{ stop(): Promise<void> }> = [];
@@ -24,6 +26,7 @@ interface TestContext {
   persistence: SqlitePersistence;
   sessions: OpenCodeSession[];
   roster: PairedRoster;
+  orcaConfig: OrcaConfig;
 }
 
 afterEach(async () => {
@@ -68,7 +71,9 @@ async function setupContext(): Promise<TestContext> {
     checks: [{ name: "noop", executable: "node", args: ["-e", "process.exit(0)"], timeoutMs: 5_000 }]
   }));
 
-  return { projectRoot, adapter, persistence, sessions, roster };
+  const orcaConfig = JSON.parse(readFileSync(join(projectRoot, "orca.config.json"), "utf8")) as OrcaConfig;
+
+  return { projectRoot, adapter, persistence, sessions, roster, orcaConfig };
 }
 
 const MODEL_BY_POSITION: Record<number, { providerId: string; modelId: string }> = {
@@ -323,6 +328,15 @@ async function submitOrchestratorActionAndAdvance(ctx: TestContext, missionId: s
   await sleep(2_000);
 }
 
+async function runControllerChecksForMission(ctx: TestContext, missionId: string): Promise<void> {
+  enqueueCheckIntents(ctx.persistence, missionId, ctx.orcaConfig, "config-hash-test");
+  const executor = createControlledCheckExecutor({ persistence: ctx.persistence, config: ctx.orcaConfig, cwd: ctx.projectRoot });
+  while ((await executor.execute(`e2e-test-${missionId}`)) > 0) {
+    /* keep claiming until none remain */
+  }
+  await sleep(50);
+}
+
 describe("full fake five-session ORCA mission", () => {
   it("preserves the five paired models and dispatches the Planner on a Session 1 objective", async () => {
     const ctx = await setupContext();
@@ -383,6 +397,9 @@ describe("full fake five-session ORCA mission", () => {
     expect(reviewerTaskId).not.toMatch(/bootstrap/);
     await submitWorkerResultAndAdvance(ctx, "reviewer", reviewerPass(missionId, reviewerTaskId), missionId);
     expect(ctx.persistence.getMission(missionId)?.state).toBe("awaiting_review_approval");
+
+    await runControllerChecksForMission(ctx, missionId);
+    expect(ctx.persistence.listCheckResults(missionId).map((result) => `${result.checkName}:${result.status}`)).toEqual(["noop:passed"]);
 
     await waitForOrchestratorDecisionPrompt(ctx, "review");
     await submitOrchestratorActionAndAdvance(ctx, missionId, "approve", "review", reviewerTaskId);
