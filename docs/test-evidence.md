@@ -1,19 +1,20 @@
 # ORCA Controller Completion — Test Evidence
 
 This document records empirical test evidence captured during execution of the
-ORCA-LIVE-READINESS-REMEDIATION-2026-07-28 plan. Each entry includes the task
+ORCA-LIVE-READINESS-REMEDIATION-2026-07-28 plan and its amendment
+ORCA-LIVE-ACCEPTANCE-CORRECTION-2026-07-28. Each entry includes the task
 identifier, commit, exact commands run, exit codes, and any reviewer notes.
 
 ## Evidence format
 
 | Task | Commit | Command | Exit | Notes / Review |
-|---|---|---|---|---|
 
 ## Starting state
 
 - Baseline commit: `03b0290` on branch `codex/fix-node24-sqlite`.
 - Worktree: `.worktrees/live-readiness-remediation` on branch `codex/live-readiness-remediation`.
-- Plan: `planning.md` (ORCA-LIVE-READINESS-REMEDIATION-2026-07-28).
+- Plan: `planning.md` (ORCA-LIVE-READINESS-REMEDIATION-2026-07-28, amended by
+  ORCA-LIVE-ACCEPTANCE-CORRECTION-2026-07-28).
 - Baseline `pnpm.cmd run test:unit`: 171/171 passing.
 - Baseline `pnpm.cmd run typecheck`: exit 0.
 
@@ -54,9 +55,9 @@ Changes:
 
 | Task | Commit | Command | Exit | Notes / Review |
 |---|---|---|---|---|
-| LIVE-003 | `<this commit>` | `pnpm.cmd run verify:95` | 0 | Full fake-readiness gate (lint + typecheck + build + unit + integration + contract + fake E2E + coverage) |
-| LIVE-003 | `<this commit>` | `pnpm.cmd run verify:release` (no env) | 2 | `scripts/verify-release.cjs` fails fast with the explicit `ORCA_REAL_E2E` / `ORCA_LIVE_WORKTREE` instructions |
-| LIVE-003 | `<this commit>` | `pnpm.cmd exec vitest run tests/e2e-real` | 0 | Suite skipped without `ORCA_REAL_E2E=1`, no failures |
+| LIVE-003 | `bc13cf7` | `pnpm.cmd run verify:95` | 0 | Full fake-readiness gate (lint + typecheck + build + unit + integration + contract + fake E2E + coverage) |
+| LIVE-003 | `bc13cf7` | `pnpm.cmd run verify:release` (no env) | 2 | `scripts/verify-release.cjs` fails fast with the explicit `ORCA_REAL_E2E` / `ORCA_LIVE_WORKTREE` instructions |
+| LIVE-003 | `bc13cf7` | `pnpm.cmd exec vitest run tests/e2e-real` | 0 | Suite skipped without `ORCA_REAL_E2E=1`, no failures |
 
 Changes:
 
@@ -64,14 +65,32 @@ Changes:
 - `scripts/verify-release.cjs`: replaces the old `verify:release` shell pipeline. Runs `verify:95` then asserts `ORCA_REAL_E2E=1` + `ORCA_LIVE_WORKTREE` and then runs `pnpm.cmd run test:e2e:real`.
 - `package.json`: `verify:release` now invokes `node scripts/verify-release.cjs`.
 
+## CORR-1 — Propagate real mission context
+
+| Task | Commit | Command | Exit | Notes / Review |
+|---|---|---|---|---|
+| CORR-1 | `318dae0` | `pnpm.cmd run verify:95` | 0 | 23 unit (incl. 6 new mission-context propagation tests) / 9 integration / 3 contract / 3 fake e2e = 38 passed (1 skipped), coverage 88.1% |
+| CORR-1 | `318dae0` | `pnpm.cmd run lint` | 0 | Clean |
+| CORR-1 | `318dae0` | `pnpm.cmd run typecheck` | 0 | Clean |
+| CORR-1 | `318dae0` | `pnpm.cmd run build` | 0 | Three ESM bundles built (cli 195 KB, controller 107 KB, opencode-integration 195 KB) |
+
+Changes:
+
+- `src/controller/mission-context.ts`: introduce `PlannerEvidence`, `BuilderEvidence`, `ReviewerFindings`, `ControllerCheckEvidence`, and `BuilderCorrectionContext` plus a `MissionTaskContext` input. `nextTaskForRole(role, missionId, attempt, context)` validates required upstream evidence for the role and emits a complete prompt payload alongside the envelope. Missing required context throws `MissionContextError` so dispatch fails fast.
+- `src/controller/mission-service.ts`: load upstream evidence from persistence (latest completed planner/builder task, reviewer/tester findings, controller check results). The Builder rejection path embeds the rejected findings and the orchestrator's correction instructions. `transitionMission` and the reject path persist the prompt payload transactionally with the task and dispatch intent, and fail the mission with `mission.context_error` when required context is missing.
+- `src/controller/mission-ingress.ts`: build the planner task through the new context-aware descriptor and persist `sourceWorkspaceFingerprint` in the mission payload so downstream roles can recover it.
+- `tests/unit/mission-context.test.ts`: add six focused tests proving missing upstream context blocks dispatch and that planner/builder/reviewer/tester payloads embed their respective evidence.
+- `tests/integration/{mission-transitions,mission-atomic-authority}.test.ts`: update the test context stubs to the new four-argument `nextTaskForRole` signature.
+- `tests/e2e/fake-complete-mission.test.ts`: run the controller checks between the reviewer pass and the review approval so the tester receives persisted check evidence.
+
 ## Current summary
 
-- 23 unit test files, 174 tests
+- 23 unit test files, 182 tests
 - 9 integration test files, 52 tests
 - 3 contract test files, 30 tests
-- 3 fake E2E test files, 8 tests (full five-role suite)
-- 1 real E2E test file, gated by `ORCA_REAL_E2E=1` + `ORCA_LIVE_WORKTREE`
-- Total active tests across 39 files: 264 + 1 gated real
+- 3 fake E2E test files, 18 tests (full five-role suite)
+- 1 real E2E test file, gated by `ORCA_REAL_E2E=1` + `ORCA_LIVE_WORKTREE` (6 prerequisite-failure tests + 1 skipped live happy-path)
+- Total active tests across 39 files: 282 + 1 gated real + 6 prerequisite tests
 
 ## Coverage thresholds
 
@@ -91,3 +110,4 @@ industry norms for controller software.
 
 - External availability of a real OpenCode server with five manually paired sessions inside `.worktrees/live-readiness-remediation`.
 - Manual setting of `ORCA_REAL_E2E=1` and `ORCA_LIVE_WORKTREE` to opt into `verify:release`.
+- The real harness is implemented but has not yet been observed end-to-end against a live OpenCode server; every live E2E run to date is skipped at `describe.skip` and `verify-release.cjs` exits `2` without live variables.

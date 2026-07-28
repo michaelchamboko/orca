@@ -4,12 +4,15 @@
 
 **Status:** ORCA is a controller-first OpenCode orchestration system proven end-to-end against a production-composed fake OpenCode adapter. The five-session mission workflow (Session 1 Orchestrator → Session 2 Planner → Session 3 Builder → Session 4 Reviewer → Session 5 Tester → explicit Session 1 final completion) is exercised by `tests/e2e/fake-complete-mission.test.ts` through the real `startController()` composition and `EventRuntime`. Live validation runs only inside an isolated worktree and remains the final acceptance gate.
 
+Every dispatched worker prompt carries the real upstream context (`PlannerEvidence` → Builder, `BuilderEvidence` → Reviewer, `ControllerCheckEvidence` → Tester, `BuilderCorrectionContext` for Builder corrections). Missing required upstream context blocks dispatch with `MissionContextError` so an empty `controller-dispatched task` placeholder never reaches a worker session.
+
 The remaining live-validation limitations are:
 
 - A reachable authenticated OpenCode server (configurable via `ORCA_OPENCODE_URL`, `ORCA_OPENCODE_USERNAME`, `ORCA_OPENCODE_PASSWORD`).
-- Exactly five manually opened OpenCode sessions paired in the isolated worktree before `verify:release`.
+- Exactly five manually opened OpenCode sessions paired in the isolated worktree before `verify:release` (the live test never calls `RosterService.pair()` itself).
+- The authoritative paired database is `.orca/orca.db`; the live test refuses to run if a root-level `state.sqlite` exists or the paired roster is absent, stale, points at another repository, or has fewer/more than five bindings.
 - Manual answer of any permission prompts during the live run (the controller blocks on permission requests until they are resolved).
-- One sentinel documentation change is written under `.orca/` to prove the live test mutates the worktree; the test never auto-commits, pushes, resets, or deletes user files.
+- One sentinel documentation change (`docs/orca-live-acceptance-sentinel.md`) is written by the Builder (not the test harness) to prove the live test mutates the worktree; the test never auto-commits, pushes, resets, or deletes user files.
 
 ## 2. Intended System Model
 
@@ -34,8 +37,9 @@ src/controller/api.ts           bearer-token Fastify API: /health, /status, /shu
 src/controller/event-runtime.ts SSE + polling reconciliation mutex, action intake, dispatch recovery
 src/controller/orchestrator-actions.ts  OrchestratorActionIntake (stable-response gate, parentId correlation)
 src/controller/worker-completion.ts     WorkerCompletionService (quiet window, idle + stable result)
-src/controller/mission-service.ts      MissionService (atomic state transitions, action intake, correction)
-src/controller/mission-context.ts      buildMissionContext, createMissionBindings (real missionId at call time)
+src/controller/mission-service.ts      MissionService (atomic state transitions, action intake, correction, context validation)
+src/controller/mission-context.ts      buildMissionContext, createMissionBindings (real missionId at call time; planner/builder/reviewer/tester/correction context types)
+src/controller/mission-ingress.ts      MissionIngress (objectives, baseline capture, sourceWorkspaceFingerprint persistence)
 src/controller/dispatch-outbox.ts      Durable outbox with leases, idempotency keys, sendPrompt
 src/controller/workflow-persistence.ts SQLite workflow contract (tasks, dispatches, approvals, events, snapshots)
 src/controller/quality-gates.ts        Planner/Builder/Reviewer/Tester evidence + stale-gate policy
@@ -51,20 +55,20 @@ src/integrations/opencode/types.ts    OpenCodeMessage / OpenCodeSession / OpenCo
 src/integrations/opencode/fake.ts     FakeOpenCodeAdapter for production-composed tests
 src/integrations/opencode/real.ts     RealOpenCodeAdapter (Basic auth, /global/event SSE, /global/health)
 src/pairing/roster-service.ts    RosterService (pair, assertCurrent, drift detection)
-src/persistence/sqlite.ts        SqlitePersistence (additive migrations, WAL, runInTransaction)
+src/persistence/sqlite.ts        SqlitePersistence (additive migrations, WAL, runInTransaction; authoritative DB at .orca/orca.db)
 src/roles/profiles.ts            Five immutable role profiles (tools, skills, instructions)
 src/roles/installer.ts           renderRoleProfile + installOrcaAssets (hash verification)
-tests/unit/*                     23 files, 174 tests
+tests/unit/*                     23 files, 182 tests
 tests/integration/*              9 files, 52 tests
 tests/contract/*                 3 files, 30 tests
-tests/e2e/*                      3 files, 8 fake five-session tests
-tests/e2e-real/real.test.ts      Gated live acceptance test (refuses to run without ORCA_REAL_E2E=1)
+tests/e2e/*                      3 files, 18 fake five-session tests
+tests/e2e-real/real.test.ts      Gated live acceptance test (refuses to run without ORCA_REAL_E2E=1 + ORCA_LIVE_WORKTREE; uses .orca/orca.db only; Builder creates docs/orca-live-acceptance-sentinel.md)
 docs/architecture.md             This document
 docs/operations.md               Operational commands (swarmctl controller start)
 docs/test-evidence.md            Empirical evidence per remediation task
 docs/threat-model.md             Security and reliability model
 docs/opencode-compatibility.md   OpenCode 1.18.3 contract map
-planning.md                      Authoritative execution plan (ORCA-LIVE-READINESS-REMEDIATION)
+planning.md                      Authoritative execution plan (ORCA-LIVE-READINESS-REMEDIATION + ORCA-LIVE-ACCEPTANCE-CORRECTION)
 ```
 
 `package.json` uses pnpm, TypeScript, tsup, Vitest, ESLint, and exposes `swarmctl` as `dist/cli.js`.
@@ -194,11 +198,11 @@ On startup, `startController()` rejects a stale runtime claim, replays the dispa
 
 ## 14. Testing Architecture
 
-- **Unit tests (23 files / 174 tests):** schemas, workflow, action intake, dispatch outbox, worker completion, mission context, workspace fingerprint, role activation, persistence, controller runtime, status, CLI.
+- **Unit tests (23 files / 182 tests):** schemas, workflow, action intake, dispatch outbox, worker completion, mission context, workspace fingerprint, role activation, persistence, controller runtime, status, CLI.
 - **Integration tests (9 files / 52 tests):** planner dispatch, mission atomic authority, mission transitions, worker-completion recovery, completion gates, orchestrator-action stability, orchestrator actions, controlled test runner, dispatch outbox.
 - **Contract tests (3 files / 30 tests):** controller startup, OpenCode adapter, OpenCode live adapter.
-- **Fake E2E tests (3 files / 8 tests):** planner-to-builder serialization, pair-live, and the comprehensive fake five-session mission suite (full happy path, duplicate observation consumes action once, review-rejection routes to Builder, stale approval is rejected, two-mission isolation, premature completion).
-- **Real E2E (1 file):** `tests/e2e-real/real.test.ts` is a gated acceptance test that refuses to run unless `ORCA_REAL_E2E=1` and `ORCA_LIVE_WORKTREE` point at the isolated worktree; it never creates sessions, never chooses models, never uses browser/terminal automation, never auto-commits, and bounds every role wait and the whole mission.
+- **Fake E2E tests (3 files / 18 tests):** planner-to-builder serialization, pair-live, and the comprehensive fake five-session mission suite (full happy path, duplicate observation consumes action once, review-rejection routes to Builder, stale approval is rejected, two-mission isolation, premature completion).
+- **Real E2E (1 file):** `tests/e2e-real/real.test.ts` is a gated acceptance test that refuses to run unless `ORCA_REAL_E2E=1` and `ORCA_LIVE_WORKTREE` point at the isolated worktree; it never creates sessions, never chooses models, never uses browser/terminal automation, never auto-commits, opens the authoritative `.orca/orca.db`, fails fast on missing/stale roster or sentinel, and bounds every role wait and the whole mission. Six prerequisite-failure tests cover reserved markers, missing `.orca/orca.db`, root-level `state.sqlite`, existing sentinel, non-worktree root, and protected branch.
 
 Coverage is reported by `pnpm.cmd run test:coverage`. Thresholds remain at 85% statements/lines/functions and 78% branches per NFR-008.
 
@@ -211,6 +215,7 @@ Coverage is reported by `pnpm.cmd run test:coverage`. Thresholds remain at 85% s
 | Role/skill assignment + hash verification | Verified | `src/roles/installer.ts`, `validateStartup` | role-activation + controller-start | none |
 | Builder-only writes / read-only roles | Verified (via result contracts) | `src/domain/schemas.ts` | quality-gates | tool grants declared but not enforced by controller |
 | Structured contracts | Verified | `src/domain/schemas.ts` | domain-schemas + fake-complete-mission | none |
+| Worker prompt payload propagation | Verified | `MissionTaskContext`, `MissionTaskDescriptor.promptPayload` persisted transactionally with task + dispatch | mission-context + fake-complete-mission | none |
 | Workflow transitions | Verified | `MissionService.transitionMission` | mission-transitions + fake-complete-mission | none |
 | Approval gates | Verified | `OrchestratorActionIntake` + `applyOrchestratorAction` | orchestrator-actions + fake-complete-mission | none |
 | SQLite mission/task/outbox storage | Verified | `src/persistence/sqlite.ts` | persistence + mission-atomic-authority | none |
@@ -220,8 +225,8 @@ Coverage is reported by `pnpm.cmd run test:coverage`. Thresholds remain at 85% s
 | Controlled test execution | Verified | `test-runner.ts` | controlled-test-runner | none |
 | Controller API/authz | Verified | `src/controller/api.ts` | controller-api + controller-runtime | none |
 | Recovery | Verified | `reconcileCompletedTasks` + outbox replay | worker-completion-recovery | none |
-| Fake end-to-end | Verified | `tests/e2e/fake-complete-mission.test.ts` | 8 fake tests | none |
-| Real five-session E2E | Gated, not yet executed | `tests/e2e-real/real.test.ts` | gated suite | blocked on external OpenCode availability + paired sessions in isolated worktree |
+| Fake end-to-end | Verified | `tests/e2e/fake-complete-mission.test.ts` | 18 fake tests | none |
+| Real five-session E2E | Gated, not yet executed | `tests/e2e-real/real.test.ts` | gated suite + 6 prerequisite-failure tests | blocked on external OpenCode availability + paired sessions in isolated worktree |
 
 ## 16. Operational Limits and Known Gaps
 

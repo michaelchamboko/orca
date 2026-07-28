@@ -27,9 +27,9 @@
 
 ## Execution Ledger
 
-- [ ] CORR-1 `fix: propagate mission context through ORCA workflow`
-- [ ] CORR-2 `fix: make live acceptance use paired ORCA state`
-- [ ] CORR-3 `docs: align ORCA live release evidence`
+- [x] CORR-1 `fix: propagate mission context through ORCA workflow` — commit `318dae0`
+- [x] CORR-2 `fix: make live acceptance use paired ORCA state` — commits `CORR-2a` (tests/e2e-real/real.test.ts), `CORR-2b` (scripts/verify-release.cjs)
+- [x] CORR-3 `docs: align ORCA live release evidence` — commit `CORR-3` (docs/test-evidence.md, docs/threat-model.md, docs/architecture.md, docs/operations.md)
 
 ## Implementation Changes
 

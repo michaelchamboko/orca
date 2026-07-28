@@ -2,7 +2,7 @@
 
 ## Starting a mission
 
-1. Pair five sessions with `swarmctl pair` (produces `.orca/state.sqlite`).
+1. Pair five sessions with `swarmctl pair` (writes the authoritative roster to `.orca/orca.db`).
 2. Confirm `orca.config.json` exists with the controller-approved checks.
 3. Start the controller with `swarmctl controller start` (auto-binds to loopback port 4317 by default; pass `--port 0` for an ephemeral port).
 4. Send a single Session 1 user objective — the controller creates a mission, dispatches the Planner, and advances on correlated orchestrator actions.
@@ -40,7 +40,7 @@ The controller is restart-safe. On startup it:
 
 ## Migrations
 
-Migrations are additive. The controller refuses to start if a durable schema version is missing. Forward-only rollback is supported via restore of the pre-migration `.orca/state.sqlite` backup.
+Migrations are additive. The controller refuses to start if a durable schema version is missing. Forward-only rollback is supported via restore of the pre-migration `.orca/orca.db` backup.
 
 ## Logs
 
@@ -53,17 +53,23 @@ Logs use identifiers, hashes, role names, state names, and timestamps only. Prom
 - `role_profile_mismatch` — role profile content or hash does not match.
 - `worker_blocked` — worker task exceeded the controller timeout, hit repeated polling failure, or hit a permission request.
 - `completion_blocked` — orchestrator's `request_completion` arrived before the final approval gate.
+- `mission.context_error` — a worker dispatch was blocked because the required upstream evidence was missing.
 
 ## Acceptance gate
 
 `pnpm.cmd run verify:95` is the fake-readiness release gate. It runs lint + typecheck + build + unit + integration + contract + fake E2E + coverage. All subcommands must exit `0`. The fake five-session E2E suite (`tests/e2e/fake-complete-mission.test.ts`) drives the controller through the production-composed fake adapter: Planner → Builder → Reviewer → Tester → Final → explicit completion.
 
-`pnpm.cmd run verify:release` adds the live OpenCode suite and is the path to the **live-validation readiness** milestone. It is implemented by `scripts/verify-release.cjs` and fails fast with a clear error message when:
+`pnpm.cmd run verify:release` adds the live OpenCode suite and is the path to the **live-validation readiness** milestone. It is implemented by `scripts/verify-release.cjs`. The script validates the prerequisites **before** any `verify:95` step runs and exits `2` with a clear error message when:
 
-- `ORCA_REAL_E2E` is not set to `"1"`, or
-- `ORCA_LIVE_WORKTREE` does not point at the isolated worktree (e.g. `.worktrees/live-readiness-remediation`).
+- `ORCA_REAL_E2E` is not set to `"1"`,
+- `ORCA_LIVE_WORKTREE` is missing or does not point at an isolated worktree (`.worktrees/<name>`),
+- the resolved branch is `main` or `master`,
+- the worktree hint disagrees with the current git worktree root, or
+- the worktree does not contain a `package.json`.
 
-The real OpenCode five-session acceptance (`tests/e2e-real/real.test.ts`) must run inside the isolated worktree against a reachable authenticated OpenCode server with exactly five paired sessions, heterogeneous user-selected models, no active mission, valid role profiles, and a healthy controller. The test leaves its sentinel diff and `.orca` evidence intact for inspection; it never auto-commits, pushes, resets, or deletes user files.
+Only after these checks pass does the script run `verify:95` followed by `pnpm.cmd run test:e2e:real`.
+
+The real OpenCode five-session acceptance (`tests/e2e-real/real.test.ts`) opens `.orca/orca.db` (it refuses to run when a root-level `state.sqlite` is present or `.orca/orca.db` is missing), requires an existing manually paired roster of exactly five sessions pointing at the worktree with non-empty models, fails fast on reserved markers in the objective or an existing `docs/orca-live-acceptance-sentinel.md`, refuses to call `RosterService.pair()`, and bounds every role wait and the whole mission. The Builder — not the test harness — creates the sentinel file with the unique run id; the test then verifies Builder evidence names the sentinel, the file contains the run id, only the Builder changed project files, the durable mission traversed every gate, and every dispatch used a paired model.
 
 `pnpm.cmd run verify` is an alias for `verify:95` and excludes the live suite by default.
 
@@ -77,7 +83,7 @@ pnpm.cmd install --frozen-lockfile
 
 # 2. Pair five sessions in the OpenCode desktop client for this worktree, then:
 swarmctl doctor   # OpenCode health + roster freshness
-swarmctl pair     # write the five-binding roster to .orca/state.sqlite
+swarmctl pair     # write the five-binding roster to .orca/orca.db
 
 # 3. Set the live-validation environment flags and run the gated release lane.
 $env:ORCA_REAL_E2E   = "1"
@@ -88,4 +94,4 @@ $env:ORCA_OPENCODE_PASSWORD = "<password>"
 pnpm.cmd run verify:release
 ```
 
-The release suite writes a sentinel `.orca/live-acceptance-sentinel.md` (forensic evidence) and a fresh mission row in `.orca/state.sqlite`. Inspect both before deciding to keep, revert, or reset the worktree. ORCA never commits, pushes, or deletes user files on its own.
+The release suite writes a sentinel `docs/orca-live-acceptance-sentinel.md` (created by the Builder — forensic evidence of the mission's file write) and a fresh mission row in `.orca/orca.db`. Inspect both before deciding to keep, revert, or reset the worktree. ORCA never commits, pushes, or deletes user files on its own.
