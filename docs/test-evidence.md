@@ -59,9 +59,9 @@ Changes:
 | LIVE-003 | `bc13cf7` | `pnpm.cmd run verify:release` (no env) | 2 | `scripts/verify-release.cjs` fails fast with the explicit `ORCA_REAL_E2E` / `ORCA_LIVE_WORKTREE` instructions |
 | LIVE-003 | `bc13cf7` | `pnpm.cmd exec vitest run tests/e2e-real` | 0 | Suite skipped without `ORCA_REAL_E2E=1`, no failures |
 
-Changes:
+Changes (superseded by `56b2341` and `a241041` — the harness described here was replaced with one that correlates to the new mission ID, validates every dispatch via `getDispatchByKey()`, and verifies the post-Builder workspace fingerprint; the sentinel moved from `.orca/live-acceptance-sentinel.md` to `docs/orca-live-acceptance-sentinel.md`):
 
-- `tests/e2e-real/real.test.ts`: replaced the intentionally-throwing placeholder with a gated acceptance test that refuses to run unless `ORCA_REAL_E2E=1` and `ORCA_LIVE_WORKTREE` are exported, the worktree is isolated (`.worktrees/<name>`), and the current branch is not `main`/`master`. The test verifies paired roster + role profiles + OpenCode health, sends one controlled sentinel `.orca/live-acceptance-sentinel.md`, bounds each role wait and the whole mission, and on failure reports only the durable mission state, redacted failure code, current task, and missing gate.
+- `tests/e2e-real/real.test.ts`: replaced the intentionally-throwing placeholder with a gated acceptance test that refuses to run unless `ORCA_REAL_E2E=1` and `ORCA_LIVE_WORKTREE` are exported, the worktree is isolated (`.worktrees/<name>`), and the current branch is not `main`/`master`.
 - `scripts/verify-release.cjs`: replaces the old `verify:release` shell pipeline. Runs `verify:95` then asserts `ORCA_REAL_E2E=1` + `ORCA_LIVE_WORKTREE` and then runs `pnpm.cmd run test:e2e:real`.
 - `package.json`: `verify:release` now invokes `node scripts/verify-release.cjs`.
 
@@ -83,14 +83,21 @@ Changes:
 - `tests/integration/{mission-transitions,mission-atomic-authority}.test.ts`: update the test context stubs to the new four-argument `nextTaskForRole` signature.
 - `tests/e2e/fake-complete-mission.test.ts`: run the controller checks between the reviewer pass and the review approval so the tester receives persisted check evidence.
 
+## CORR-2 + FRC-002..004 — Live acceptance correlates to one mission; workspace evidence is non-vacuous; prerequisite coverage complete
+
+| Task | Commit | Command | Exit | Notes / Review |
+|---|---|---|---|---|
+| FRC-001 | `d1807c9` | `1..5 \| ForEach-Object { pnpm.cmd exec vitest run tests/e2e/fake-complete-mission.test.ts }` | 0 (5 consecutive runs) | Replaced every `sleep(2_000)` / `sleep(3_000)` in `tests/e2e/fake-complete-mission.test.ts` with bounded `eventually` waits for the expected mission state or rejection event; the timeout failure now includes the mission state and the latest mission events for diagnostics. Added a `delayed but valid final action` test that drives a full mission end-to-end via bounded waits. |
+| FRC-002..004 | `a241041` | `pnpm.cmd exec vitest run tests/e2e-real` | 0 | 12 prerequisite tests pass (no-env path stays skipped); live happy-path test now derives `missionId` from `stableId('mission', roster.rosterId, userMessageId)`, waits only for that mission, asserts the complete dispatched-event sequence (planner / 4 orchestrator decisions / builder / reviewer / tester), loads every dispatch via `getDispatchByKey()`, asserts role, paired session, exact provider/model, and rejects worker-to-worker targets; captures the workspace baseline (changed + untracked paths, excluding `.orca/`) before submission and after completion requires the delta to contain exactly `docs/orca-live-acceptance-sentinel.md`; requires `Reviewer.reviewedWorkspaceFingerprint` and `Tester.testedWorkspaceFingerprint` to equal the post-Builder workspace fingerprint; prerequisite tests cover missing `.orca/orca.db`, empty roster, wrong repository root, fewer than five bindings + `UNIQUE(role)` violation, missing provider or model id, and existing active mission. |
+
 ## Current summary
 
 - 23 unit test files, 182 tests
 - 9 integration test files, 52 tests
 - 3 contract test files, 30 tests
-- 3 fake E2E test files, 18 tests (full five-role suite)
-- 1 real E2E test file, gated by `ORCA_REAL_E2E=1` + `ORCA_LIVE_WORKTREE` (6 prerequisite-failure tests + 1 skipped live happy-path)
-- Total active tests across 39 files: 282 + 1 gated real + 6 prerequisite tests
+- 3 fake E2E test files, **19** tests (full five-role suite + delayed final action)
+- 1 real E2E test file, gated by `ORCA_REAL_E2E=1` + `ORCA_LIVE_WORKTREE` (**12** prerequisite tests + 1 skipped live happy-path)
+- Total active tests across 39 files: 282 + 12 prerequisite + 1 gated real
 
 ## Coverage thresholds
 
@@ -110,4 +117,4 @@ industry norms for controller software.
 
 - External availability of a real OpenCode server with five manually paired sessions inside `.worktrees/live-readiness-remediation`.
 - Manual setting of `ORCA_REAL_E2E=1` and `ORCA_LIVE_WORKTREE` to opt into `verify:release`.
-- The real harness is implemented but has not yet been observed end-to-end against a live OpenCode server; every live E2E run to date is skipped at `describe.skip` and `verify-release.cjs` exits `2` without live variables.
+- The real harness is implemented and correlates to one mission + its dispatches but has not yet been observed end-to-end against a live OpenCode server; every live E2E run to date is skipped at `describe.skip` and `verify-release.cjs` exits `2` without live variables.
