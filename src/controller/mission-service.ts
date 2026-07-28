@@ -42,7 +42,7 @@ export interface MissionTransitionResult {
 export interface MissionActionContext {
   getRoster(): Promise<PairedRoster>;
   bind(role: Role): { sessionId: string; agentName: string; model: ModelRef };
-  nextTaskForRole(role: Role, attempt: number): { envelope: TaskEnvelope; targetSessionId: string; capturedModel: ModelRef; promptMessageId: string; dispatchKey: string };
+  nextTaskForRole(role: Role, missionId: string, attempt: number): { envelope: TaskEnvelope; targetSessionId: string; capturedModel: ModelRef; promptMessageId: string; dispatchKey: string };
   nextDecisionPrompt(missionId: string, gate: "plan" | "builder" | "review" | "test" | "final", taskId: string): { targetSessionId: string; capturedModel: ModelRef; promptMessageId: string; dispatchKey: string };
   publishNotice?(content: string, correlationId: string): Promise<void>;
 }
@@ -133,7 +133,7 @@ export class MissionService {
       const nextRole = requiredRoleForMissionState(input.nextState);
       if (nextRole !== null && !isTerminalState(input.nextState)) {
         const attempt = correctionAttemptsFor(input.missionId, nextRole, this.persistence) + 1;
-        const next = this.context.nextTaskForRole(nextRole, attempt);
+        const next = this.context.nextTaskForRole(nextRole, input.missionId, attempt);
         this.persistence.saveTaskExecution({ envelope: next.envelope, targetSessionId: next.targetSessionId, controllerPromptMessageId: next.promptMessageId, state: "dispatched" });
         this.persistence.recordTaskPromptAttempt(next.envelope.taskId, next.promptMessageId, "worker_task", attempt);
         this.persistence.enqueueDispatch({
@@ -208,7 +208,7 @@ export class MissionService {
         this.persistence.recordMissionEvent(action.missionId, taskIdForApproval ?? null, "approval.rejected", { decision: "rejected", sourceMessageId, gate });
       });
       const role = roleForGate(gate);
-      const next = this.context.nextTaskForRole(role, priorAttempts + 1);
+      const next = this.context.nextTaskForRole(role, action.missionId, priorAttempts + 1);
       this.persistence.runInTransaction(() => {
         this.persistence.saveTaskExecution({ envelope: next.envelope, targetSessionId: next.targetSessionId, controllerPromptMessageId: next.promptMessageId, state: "dispatched" });
         this.persistence.recordTaskPromptAttempt(next.envelope.taskId, next.promptMessageId, "worker_task", priorAttempts + 1);

@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 
 import type { OpenCodeLiveAdapter } from "../integrations/opencode/adapter.js";
 import type {
@@ -25,7 +25,7 @@ export type DecisionGate = "plan" | "builder" | "review" | "test" | "final";
 export interface MissionContextBindings {
   getRoster(): Promise<PairedRoster>;
   bind(role: Role): { sessionId: string; agentName: string; model: ModelRef };
-  nextTaskForRole(role: Exclude<Role, "orchestrator">, attempt: number): {
+  nextTaskForRole(role: Exclude<Role, "orchestrator">, missionId: string, attempt: number): {
     envelope: TaskEnvelope;
     targetSessionId: string;
     capturedModel: ModelRef;
@@ -109,8 +109,13 @@ export function buildMissionContext(options: {
  * Builds deterministic next-task descriptors for worker roles. Produces
  * envelope, target session, captured model, prompt message id, and dispatch
  * key without consulting live adapter state so retries are idempotent.
+ *
+ * The mission id is supplied at call time (`nextTaskForRole(role, missionId, attempt)`)
+ * so the same bindings can serve every mission in the controller's lifetime and
+ * every dispatched task, decision prompt, dispatch key, and snapshot references
+ * the actual mission id — never a synthetic placeholder such as `"bootstrap"`.
  */
-export function createMissionBindings(roster: PairedRoster, missionId: string): MissionContextBindings {
+export function createMissionBindings(roster: PairedRoster): MissionContextBindings {
   const findBinding = (role: Exclude<Role, "orchestrator">) => {
     const binding = roster.bindings.find((candidate) => candidate.role === role);
     if (!binding) throw new Error(`roster drift: missing binding for ${role}`);
@@ -124,7 +129,8 @@ export function createMissionBindings(roster: PairedRoster, missionId: string): 
       if (!binding) throw new Error(`roster drift: missing binding for ${role}`);
       return { sessionId: binding.sessionId, agentName: binding.agentName, model: { ...binding.model } };
     },
-    nextTaskForRole(role: Exclude<Role, "orchestrator">, attempt: number) {
+    nextTaskForRole(role: Exclude<Role, "orchestrator">, missionId: string, attempt: number) {
+      if (!missionId) throw new Error("nextTaskForRole requires the actual mission id");
       const binding = findBinding(role);
       const taskId = stableId("task", role, missionId, attempt);
       const promptMessageId = stableId("orca-prompt", role, missionId, attempt);
@@ -155,11 +161,12 @@ export function createMissionBindings(roster: PairedRoster, missionId: string): 
       };
     },
     nextDecisionPrompt(missionId: string, gate: DecisionGate, taskId: string) {
+      if (!missionId) throw new Error("nextDecisionPrompt requires the actual mission id");
       const binding = roster.bindings.find((candidate) => candidate.role === "orchestrator");
       if (!binding) throw new Error("roster drift: missing orchestrator binding");
-      const seed = `${missionId}-${gate}-${taskId}-${randomUUID()}`;
-      const promptMessageId = stableId("orca-decision", gate as unknown as Role, seed, Math.floor(Date.now() / 1000));
-      const dispatchKey = stableId("dispatch-decision", gate as unknown as Role, seed, Math.floor(Date.now() / 1000));
+      const seed = `${missionId}-${gate}-${taskId}`;
+      const promptMessageId = stableId("orca-decision", gate as unknown as Role, seed, 1);
+      const dispatchKey = stableId("dispatch-decision", gate as unknown as Role, seed, 1);
       return {
         targetSessionId: binding.sessionId,
         capturedModel: { ...binding.model },

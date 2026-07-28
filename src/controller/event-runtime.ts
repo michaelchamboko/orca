@@ -59,6 +59,7 @@ export class EventRuntime {
         await this.completion.observeAll();
         const reconciled = this.missionContext.consumeCompletedTasks();
         if (reconciled > 0) await this.dispatch.recoverPending();
+        await this.missionContext.orchestratorActionIntake.pollPending();
       } catch {
         /* reconciliation must remain best-effort; durable outbox retries on the next pass */
       }
@@ -86,6 +87,9 @@ export class EventRuntime {
         await this.ingress.processEvent(event.sessionId, event.messageId);
       }
       await this.completion.observeEvent(event);
+      if (event.type === "message.updated") {
+        await this.missionContext.orchestratorActionIntake.observeEvent(event);
+      }
       try {
         const reconciled = this.missionContext.consumeCompletedTasks();
         if (reconciled > 0) await this.dispatch.recoverPending();

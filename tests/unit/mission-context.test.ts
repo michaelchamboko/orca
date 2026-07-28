@@ -52,7 +52,7 @@ describe("buildMissionContext", () => {
       adapter,
       persistence,
       rosterService,
-      bindings: createMissionBindings(roster, "mission-1")
+      bindings: createMissionBindings(roster)
     });
     expect(context.missionService).toBeInstanceOf(MissionService);
     expect(context.orchestratorActionIntake).toBeInstanceOf(OrchestratorActionIntake);
@@ -61,7 +61,7 @@ describe("buildMissionContext", () => {
 
   it("rejects missing binding in nextTaskForRole", () => {
     const { persistence, adapter, roster, rosterService } = setup();
-    const bindings = createMissionBindings(roster, "mission-1");
+    const bindings = createMissionBindings(roster);
     const updatedBindings = { ...bindings, nextTaskForRole: () => { throw new Error("roster drift: missing binding for builder"); } };
     const context = buildMissionContext({ adapter, persistence, rosterService, bindings: updatedBindings });
     expect(context.missionService).toBeInstanceOf(MissionService);
@@ -71,29 +71,61 @@ describe("buildMissionContext", () => {
 describe("createMissionBindings", () => {
   it("produces deterministic ids for the same mission", () => {
     const { roster } = setup();
-    const a = createMissionBindings(roster, "mission-1");
-    const b = createMissionBindings(roster, "mission-1");
-    const planner = a.nextTaskForRole("planner", 1);
-    const planner2 = b.nextTaskForRole("planner", 1);
+    const a = createMissionBindings(roster);
+    const b = createMissionBindings(roster);
+    const planner = a.nextTaskForRole("planner", "mission-1", 1);
+    const planner2 = b.nextTaskForRole("planner", "mission-1", 1);
     expect(planner.dispatchKey).toBe(planner2.dispatchKey);
+    expect(planner.promptMessageId).toBe(planner2.promptMessageId);
+    expect(planner.envelope.missionId).toBe("mission-1");
+    expect(planner.envelope.taskId).toBe(planner2.envelope.taskId);
+  });
+
+  it("uses the supplied mission id rather than a placeholder", () => {
+    const { roster } = setup();
+    const bindings = createMissionBindings(roster);
+    const task = bindings.nextTaskForRole("builder", "mission-99", 1);
+    expect(task.envelope.missionId).toBe("mission-99");
+    expect(task.envelope.taskId).toMatch(/^task-[a-f0-9]+$/);
+    expect(task.dispatchKey).toMatch(/^dispatch-[a-f0-9]+$/);
+  });
+
+  it("rejects an empty mission id so a synthetic value cannot be used", () => {
+    const { roster } = setup();
+    const bindings = createMissionBindings(roster);
+    expect(() => bindings.nextTaskForRole("planner", "", 1)).toThrow(/mission id/);
+    expect(() => bindings.nextDecisionPrompt("", "plan", "task-1")).toThrow(/mission id/);
+  });
+
+  it("produces distinct dispatch keys for two different missions", () => {
+    const { roster } = setup();
+    const bindings = createMissionBindings(roster);
+    const a = bindings.nextTaskForRole("builder", "mission-A", 1);
+    const b = bindings.nextTaskForRole("builder", "mission-B", 1);
+    expect(a.dispatchKey).not.toBe(b.dispatchKey);
+    expect(a.envelope.taskId).not.toBe(b.envelope.taskId);
+    expect(a.promptMessageId).not.toBe(b.promptMessageId);
   });
 
   it("throws on missing binding", () => {
     const { roster } = setup();
-    const bindings = createMissionBindings(roster, "mission-1");
+    const bindings = createMissionBindings(roster);
     expect(() => bindings.bind("orchestrator")).not.toThrow();
-    expect(() => bindings.nextTaskForRole("planner", 1)).not.toThrow();
+    expect(() => bindings.nextTaskForRole("planner", "mission-1", 1)).not.toThrow();
   });
 
-  it("builds an orchestrator decision prompt for each gate", () => {
+  it("builds a deterministic orchestrator decision prompt per gate", () => {
     const { roster } = setup();
-    const bindings = createMissionBindings(roster, "mission-1");
+    const bindings = createMissionBindings(roster);
     for (const gate of ["plan", "builder", "review", "test", "final"] as const) {
       const decision = bindings.nextDecisionPrompt("mission-1", gate, "task-1");
+      const again = bindings.nextDecisionPrompt("mission-1", gate, "task-1");
       expect(decision.targetSessionId).toBe("session-1");
       expect(decision.capturedModel).toEqual({ providerId: "openai", modelId: "gpt-5" });
       expect(decision.dispatchKey).toMatch(/^dispatch-/);
       expect(decision.promptMessageId).toMatch(/^orca-decision-/);
+      expect(decision.dispatchKey).toBe(again.dispatchKey);
+      expect(decision.promptMessageId).toBe(again.promptMessageId);
     }
   });
 });

@@ -79,12 +79,12 @@ function setup() {
       if (!binding) throw new Error("missing binding");
       return { sessionId: binding.sessionId, agentName: binding.agentName, model: binding.model };
     },
-    nextTaskForRole: (role: Role, attempt: number) => {
+    nextTaskForRole: (role: Role, missionId: string, attempt: number) => {
       taskCounter += 1;
       const taskId = `task-${taskCounter}`;
       const binding = roster.bindings.find((b) => b.role === role);
       if (!binding) throw new Error("missing binding");
-      const envelope = makeEnvelope(role, taskId, attempt);
+      const envelope = { ...makeEnvelope(role, taskId, attempt), missionId };
       return {
         envelope,
         targetSessionId: binding.sessionId,

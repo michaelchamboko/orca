@@ -66,20 +66,28 @@ export class OrchestratorActionIntake {
     if (!orchestrator || orchestrator.sessionId !== sessionId) {
       return [{ kind: "rejected", reason: "not_orchestrator_session", reasonCode: REASON_CODES.not_orchestrator_session }];
     }
-    const decision = await this.context.resolveDecisionPrompt(messageId);
-    if (!decision) {
-      return [{ kind: "rejected", reason: "no_decision_prompt", reasonCode: REASON_CODES.no_decision_prompt }];
-    }
-    const decisionPromptMessageId = decision.missionId ? await this.lookupDecisionPromptMessageId(decision.missionId) : null;
-    if (!decisionPromptMessageId) {
-      return [{ kind: "rejected", reason: "no_decision_prompt", reasonCode: REASON_CODES.no_decision_prompt }];
-    }
     let message: OpenCodeMessage;
     try { message = await this.adapter.getMessage(sessionId, messageId); }
     catch { return [{ kind: "rejected", reason: "not_idle", reasonCode: REASON_CODES.not_idle }]; }
     if (message.role !== "assistant") {
-      this.recordDecisionResponse(decision.missionId, decisionPromptMessageId, messageId, hashActionEnvelopeRaw(message), "rejected", REASON_CODES.not_assistant_message, null, null);
+      const parentId = message.parentId ?? messageId;
+      const decision = await this.context.resolveDecisionPrompt(parentId);
+      if (decision) {
+        const decisionPromptMessageId = await this.lookupDecisionPromptMessageId(decision.missionId);
+        if (decisionPromptMessageId) {
+          this.recordDecisionResponse(decision.missionId, decisionPromptMessageId, messageId, hashActionEnvelopeRaw(message), "rejected", REASON_CODES.not_assistant_message, null, null);
+        }
+      }
       return [{ kind: "rejected", reason: "not_assistant_message", reasonCode: REASON_CODES.not_assistant_message }];
+    }
+    const parentId = message.parentId ?? messageId;
+    const decision = await this.context.resolveDecisionPrompt(parentId);
+    if (!decision) {
+      return [{ kind: "rejected", reason: "no_decision_prompt", reasonCode: REASON_CODES.no_decision_prompt }];
+    }
+    const decisionPromptMessageId = await this.lookupDecisionPromptMessageId(decision.missionId);
+    if (!decisionPromptMessageId) {
+      return [{ kind: "rejected", reason: "no_decision_prompt", reasonCode: REASON_CODES.no_decision_prompt }];
     }
     if (message.parentId !== decisionPromptMessageId) {
       this.recordDecisionResponse(decision.missionId, decisionPromptMessageId, messageId, hashActionEnvelopeRaw(message), "rejected", REASON_CODES.parent_mismatch, null, null);
@@ -123,6 +131,31 @@ export class OrchestratorActionIntake {
     }
 
     return this.applyValidatedAction(decision.missionId, decisionPromptMessageId, messageId, validation.value, message);
+  }
+
+  /**
+   * Polls the orchestrator session for any recent assistant messages that may
+   * have been missed by SSE delivery (e.g. transient disconnect, controller
+   * restart). Each assistant message observed is correlated to the most recent
+   * controller decision prompt for its mission and consumed exactly once.
+   */
+  async pollPending(): Promise<ActionIngestOutcome[]> {
+    const roster = await this.context.getRoster();
+    const orchestrator = roster.bindings.find((binding) => binding.role === "orchestrator");
+    if (!orchestrator) return [];
+    const outcomes: ActionIngestOutcome[] = [];
+    let messages: OpenCodeMessage[];
+    try { messages = await this.adapter.listMessages(orchestrator.sessionId); }
+    catch { return []; }
+    const seen = new Set<string>();
+    for (const message of messages) {
+      if (message.role !== "assistant") continue;
+      if (seen.has(message.id)) continue;
+      seen.add(message.id);
+      const observed = await this.observeMessage(orchestrator.sessionId, message.id);
+      for (const outcome of observed) outcomes.push(outcome);
+    }
+    return outcomes;
   }
 
   private firstSeenAt(): number | null {
