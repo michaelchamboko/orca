@@ -15,6 +15,7 @@ const launchers: RunningLauncherUi[] = [];
 
 interface LauncherApiState {
   project: { root: string };
+  opencode: { healthy: boolean; version: string | null; error: string | null };
   sessions: unknown[];
 }
 
@@ -116,6 +117,41 @@ describe("swarmctl ui launcher API", () => {
     const response = await post(launcher, "/api/roster/pair", { assignments: assignments() }, auth);
 
     expect(response).toMatchObject({ status: 409, error: "SESSION_CHANGED" });
+  });
+
+  test("probes OpenCode health and surfaces the adapter error verbatim", async () => {
+    const projectRoot = workspace();
+    const adapter = new LauncherAdapter(sessions(projectRoot));
+    const originalHealth = adapter.health.bind(adapter);
+    (adapter as unknown as { health: () => Promise<{ healthy: boolean }> }).health = async () => {
+      throw new Error("OpenCode authentication failed (401). Check OPENCODE_SERVER_USERNAME and OPENCODE_SERVER_PASSWORD.");
+    };
+    const launcher = await launcherFor(projectRoot, adapter);
+    const auth = await bootstrap(launcher);
+
+    const probe = await post(launcher, "/api/opencode/test", {}, auth);
+    expect(probe.status).toBe(502);
+    expect(probe).toMatchObject({ healthy: false, origin: "http://127.0.0.1:4096" });
+    expect(String(probe.error)).toContain("401");
+
+    (adapter as unknown as { health: () => Promise<{ healthy: boolean }> }).health = originalHealth;
+    const ok = await post(launcher, "/api/opencode/test", {}, auth);
+    expect(ok.status).toBe(200);
+    expect(ok).toMatchObject({ healthy: true, origin: "http://127.0.0.1:4096" });
+  });
+
+  test("exposes the OpenCode error string in /api/state when health fails", async () => {
+    const projectRoot = workspace();
+    const adapter = new LauncherAdapter(sessions(projectRoot));
+    (adapter as unknown as { health: () => Promise<{ healthy: boolean }> }).health = async () => {
+      throw new Error("OpenCode request to /global/health failed with HTTP 401.");
+    };
+    const launcher = await launcherFor(projectRoot, adapter);
+    const auth = await bootstrap(launcher);
+
+    const state = await getState(launcher, auth);
+    expect(state.opencode.healthy).toBe(false);
+    expect(String(state.opencode.error)).toContain("401");
   });
 });
 

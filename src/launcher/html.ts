@@ -25,6 +25,7 @@ export function renderLauncherHtml(cspNonce: string): string {
       <button id="pair-roster" type="button">Pair Sessions</button>
       <button id="start-controller" type="button">Start ORCA</button>
       <button id="stop-controller" type="button">Stop</button>
+      <button id="test-opencode" type="button">Test OpenCode</button>
       <button id="refresh-state" type="button">Refresh</button>
     </section>
     <section class="panel">
@@ -188,6 +189,7 @@ const launcherJs = `
     alerts.textContent = '';
     if (state.assets.restartRequired) addAlert(alerts, 'OpenCode restart required before pairing or starting.', false);
     state.blockers.forEach(function (code) { addAlert(alerts, code, true); });
+    if (state.opencode.error) addAlert(alerts, state.opencode.error + ' (origin: ' + state.opencode.origin + ')', true);
     if (state.controller.lastFailureCode) addAlert(alerts, state.controller.lastFailureCode, true);
   }
 
@@ -308,7 +310,30 @@ const launcherJs = `
   });
   byId('start-controller').addEventListener('click', function () { void mutate('/api/controller/start'); });
   byId('stop-controller').addEventListener('click', function () { void mutate('/api/controller/stop'); });
-  byId('refresh-state').addEventListener('click', function () { void refresh(); });
+  byId('refresh-state').addEventListener('click', function () { void refresh().catch(function (error) { addAlert(byId('alerts'), 'Refresh failed: ' + (error && error.message ? error.message : String(error)), true); }); });
+  byId('test-opencode').addEventListener('click', function () { void testOpenCode(); });
+
+  async function testOpenCode() {
+    var alerts = byId('alerts');
+    addAlert(alerts, 'Probing OpenCode ' + (currentState && currentState.opencode ? currentState.opencode.origin : ''), false);
+    try {
+      var response = await fetch('/api/opencode/test', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-orca-csrf': csrf },
+        body: '{}'
+      });
+      var body = await response.json().catch(function () { return {}; });
+      if (response.status === 200 && body.healthy) {
+        addAlert(alerts, 'OpenCode reachable at ' + body.origin + ' (version: ' + (body.version || 'unknown') + ').', false);
+      } else {
+        addAlert(alerts, 'OpenCode probe failed (HTTP ' + response.status + '): ' + (body.error || 'no error message'), true);
+      }
+    } catch (error) {
+      addAlert(alerts, 'OpenCode probe error: ' + (error && error.message ? error.message : String(error)), true);
+    } finally {
+      await refresh().catch(function () {});
+    }
+  }
 
   bootstrap().catch(function (error) {
     addAlert(byId('alerts'), error.message, true);

@@ -84,7 +84,7 @@ interface UiSession {
 
 interface UiState {
   project: { root: string };
-  opencode: { origin: string; healthy: boolean; version: string | null };
+  opencode: { origin: string; healthy: boolean; version: string | null; error: string | null };
   roles: Array<{ position: number; role: Role; label: string; selectedSessionId: string | null }>;
   sessions: UiSession[];
   assets: { active: boolean; restartRequired: boolean };
@@ -204,6 +204,25 @@ class LauncherService {
       this.requireSession(request, false);
       return this.readState();
     });
+    this.app.post("/api/opencode/test", async (request, reply) => {
+      this.requireSession(request, true);
+      parseBody(emptyBodySchema, request.body);
+      try {
+        const health = await this.options.adapter.health();
+        return {
+          healthy: health.healthy === true,
+          version: health.version ?? null,
+          origin: this.options.opencodeOrigin
+        };
+      } catch (caught) {
+        await reply.code(502).send({
+          healthy: false,
+          origin: this.options.opencodeOrigin,
+          error: caught instanceof Error ? caught.message : String(caught)
+        });
+        return;
+      }
+    });
     this.app.post("/api/assets/install", async (request) => {
       this.requireSession(request, true);
       parseBody(emptyBodySchema, request.body);
@@ -274,7 +293,7 @@ class LauncherService {
 
     return {
       project: { root: this.options.projectRoot },
-      opencode: { origin: this.options.opencodeOrigin, healthy: opencode.healthy, version: opencode.version },
+      opencode: { origin: this.options.opencodeOrigin, healthy: opencode.healthy, version: opencode.version, error: opencode.error },
       roles: roleProfiles.map((profile) => ({
         position: profile.position,
         role: profile.role,
@@ -296,14 +315,17 @@ class LauncherService {
     };
   }
 
-  private async readOpenCodeState(blockers: LauncherErrorCode[]): Promise<{ healthy: boolean; version: string | null; sessions: OpenCodeSession[] }> {
+  private async readOpenCodeState(blockers: LauncherErrorCode[]): Promise<{ healthy: boolean; version: string | null; sessions: OpenCodeSession[]; error: string | null }> {
     let healthy = false;
     let version: string | null = null;
+    let error: string | null = null;
     try {
       const health = await this.options.adapter.health();
       healthy = health.healthy;
       version = health.version ?? null;
-    } catch {
+      if (!healthy) error = "OpenCode /global/health returned healthy=false.";
+    } catch (caught) {
+      error = caught instanceof Error ? caught.message : String(caught);
       blockers.push("OPENCODE_UNAVAILABLE");
     }
     let sessions: OpenCodeSession[] = [];
@@ -312,12 +334,13 @@ class LauncherService {
         sessions = await this.options.adapter.listSessions(this.options.projectRoot);
         this.latestSnapshot.clear();
         for (const session of sessions) this.latestSnapshot.set(session.id, toSnapshot(session));
-      } catch {
+      } catch (caught) {
         healthy = false;
+        error = caught instanceof Error ? caught.message : String(caught);
         blockers.push("OPENCODE_UNAVAILABLE");
       }
     }
-    return { healthy, version, sessions };
+    return { healthy, version, sessions, error };
   }
 
   private async pairRoster(assignments: LauncherAssignments): Promise<void> {
