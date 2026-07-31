@@ -24,6 +24,7 @@ export interface ServerCommandOptions {
 
 export interface UiCommandOptions extends ServerCommandOptions {
   open?: boolean;
+  discoverPort?: boolean;
 }
 
 export interface CliHandlers {
@@ -74,6 +75,7 @@ export function buildCliProgram(handlers: Partial<CliHandlers> = {}): Command {
     .description("start the localhost ORCA launcher dashboard")
     .option("--server <url>", "OpenCode server URL")
     .option("--no-open", "print the launcher URL without opening a browser")
+    .option("--discover-port", "scan common loopback ports and print the first responding OpenCode origin, then exit")
     .action((options: UiCommandOptions) => (handlers.ui ?? runConfiguredUi)(options));
 
   program
@@ -196,6 +198,17 @@ export function ensureLoopbackBypassesProxy(loopbackOrigin: string): void {
 
 async function runConfiguredUi(options: UiCommandOptions): Promise<void> {
   const projectRoot = await resolveCanonicalProjectRoot(process.cwd());
+  if (options.discoverPort) {
+    const origin = await discoverOpenCodeOrigin(options.server ?? process.env.OPENCODE_SERVER_URL);
+    if (!origin) {
+      process.stderr.write("No OpenCode server found on common loopback ports (4096, 4097, 5317, 8080, 3000, 5173, 7777). Start OpenCode and try again.\n");
+      process.exitCode = 2;
+      return;
+    }
+    process.stdout.write(`Found OpenCode at ${origin}\n`);
+    process.stdout.write(`Launch with: node dist/cli.js ui --server ${origin}\n`);
+    return;
+  }
   const requestedOrigin = validateLoopbackOpenCodeOrigin(options.server ?? process.env.OPENCODE_SERVER_URL ?? "http://127.0.0.1:4096");
   const connection = await resolveOpenCodeConnectionConfig({ baseUrl: requestedOrigin });
   const opencodeOrigin = validateLoopbackOpenCodeOrigin(connection.baseUrl);
@@ -219,6 +232,30 @@ async function runConfiguredUi(options: UiCommandOptions): Promise<void> {
     process.stdout.write("Browser launch failed; open the printed URL manually.\n");
   }
   await new Promise<void>(() => {});
+}
+
+async function discoverOpenCodeOrigin(hint: string | undefined): Promise<string | null> {
+  const candidates: string[] = [];
+  if (hint) candidates.push(validateLoopbackOpenCodeOrigin(hint));
+  for (const port of [4096, 4097, 4098, 4099, 5317, 8080, 8000, 3000, 5173, 5174, 7777]) {
+    candidates.push(`http://127.0.0.1:${port}`);
+  }
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    if (seen.has(candidate)) continue;
+    seen.add(candidate);
+    try {
+      const connection = await resolveOpenCodeConnectionConfig({ baseUrl: candidate, interactive: false });
+      const adapter = new RealOpenCodeAdapter(connection);
+      const health = await adapter.health();
+      if (health.healthy) {
+        return validateLoopbackOpenCodeOrigin(connection.baseUrl);
+      }
+    } catch {
+      /* try next candidate */
+    }
+  }
+  return null;
 }
 
 

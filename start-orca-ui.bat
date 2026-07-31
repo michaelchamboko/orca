@@ -41,6 +41,7 @@ if "%ORCA_SERVER_URL%"=="" set "ORCA_SERVER_URL=http://127.0.0.1:4096"
 
 echo [start-orca-ui] launching swarmctl ui --server %ORCA_SERVER_URL%
 echo [start-orca-ui] NO_PROXY=%NO_PROXY%
+echo [start-orca-ui] If OpenCode is on a different port, pass --server http://127.0.0.1:<port> or run 'node dist\cli.js ui --discover-port' to scan common ports.
 node dist\cli.js ui --server "%ORCA_SERVER_URL%"
 set "EXITCODE=%errorlevel%"
 
