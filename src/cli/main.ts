@@ -235,26 +235,43 @@ async function runConfiguredUi(options: UiCommandOptions): Promise<void> {
 }
 
 async function discoverOpenCodeOrigin(hint: string | undefined): Promise<string | null> {
-  const candidates: string[] = [];
-  if (hint) candidates.push(validateLoopbackOpenCodeOrigin(hint));
-  for (const port of [4096, 4097, 4098, 4099, 5317, 8080, 8000, 3000, 5173, 5174, 7777]) {
-    candidates.push(`http://127.0.0.1:${port}`);
-  }
-  const seen = new Set<string>();
-  for (const candidate of candidates) {
-    if (seen.has(candidate)) continue;
-    seen.add(candidate);
+  const { OpenCodeHttpError } = await import("../integrations/opencode/real.js");
+  const ports = [
+    ...(hint ? [Number(new URL(validateLoopbackOpenCodeOrigin(hint)).port)] : []),
+    4096, 4097, 4098, 4099, 4100, 4101, 4102, 4103, 4104, 4105,
+    5317, 5318, 5320, 5400,
+    8080, 8081, 8082, 8083, 8084, 8085,
+    3000, 3001, 5173, 5174, 5175,
+    7777, 7778, 7779,
+    8888, 9999
+  ];
+  const seen = new Set<number>();
+  const tried: string[] = [];
+  for (const port of ports) {
+    if (seen.has(port)) continue;
+    seen.add(port);
+    const candidate = `http://127.0.0.1:${port}`;
+    tried.push(candidate);
     try {
       const connection = await resolveOpenCodeConnectionConfig({ baseUrl: candidate, interactive: false });
       const adapter = new RealOpenCodeAdapter(connection);
       const health = await adapter.health();
       if (health.healthy) {
+        process.stdout.write(`[discover-port] 200 at ${candidate}\n`);
         return validateLoopbackOpenCodeOrigin(connection.baseUrl);
       }
-    } catch {
-      /* try next candidate */
+      process.stdout.write(`[discover-port] 200 but healthy=false at ${candidate}\n`);
+    } catch (caught) {
+      if (caught instanceof OpenCodeHttpError && caught.status === 401) {
+        process.stdout.write(`[discover-port] 401 at ${candidate} — accepting as OpenCode\n`);
+        return validateLoopbackOpenCodeOrigin(candidate);
+      }
+      if (caught instanceof OpenCodeHttpError && caught.status === 404) {
+        continue;
+      }
     }
   }
+  process.stderr.write(`[discover-port] scanned ${tried.length} ports, no OpenCode found\n`);
   return null;
 }
 
