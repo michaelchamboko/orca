@@ -57,7 +57,7 @@ export interface WorkflowPersistence extends RosterPersistence {
   recordMissionEvent(missionId: string, taskId: string | null, eventType: string, payload: Record<string, unknown>): void;
   getMissionEvents(missionId: string): Array<{ taskId: string | null; eventType: string; payload: Record<string, unknown>; createdAt: string }>;
   consumeTask(taskId: string, timestamp?: string): void;
-  supersedeApprovalsBefore(missionId: string, gate: string, timestamp?: string): number;
+  supersedeApprovalsBefore(missionId: string, gate: string, timestamp?: string, preserveApprovalId?: string): number;
   recordGateAttempt(missionId: string, gate: string, role: Exclude<Role, "orchestrator">, attempt: number, workspaceFingerprint: string | null, timestamp?: string): void;
   getGateAttempts(missionId: string, gate: string): Array<{ attempt: number; role: Exclude<Role, "orchestrator">; workspaceFingerprint: string | null; createdAt: string }>;
   getGateAttemptCount(missionId: string, gate: string): number;

@@ -38,6 +38,17 @@ describe("RealOpenCodeAdapter", () => {
     ]);
   });
 
+  it("does not substitute the requested project root when OpenCode omits session directory evidence", async () => {
+    const baseUrl = await fixture((_request, response) => {
+      json(response, [{ id: "s-1", model: { providerID: "opencode", id: "north-mini-code-free" } }]);
+    });
+    const adapter = new RealOpenCodeAdapter({ ...credentials, baseUrl });
+
+    await expect(adapter.listSessions("C:/workspace")).resolves.toEqual([
+      expect.objectContaining({ projectRoot: "" })
+    ]);
+  });
+
   it("reads a session model", async () => {
     const baseUrl = await fixture(async (request, response) => {
       if (request.url === "/session/s-1" && request.method === "GET") return json(response, { id: "s-1", model: { providerID: "opencode", id: "north-mini-code-free" } });

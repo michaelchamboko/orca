@@ -116,7 +116,7 @@ export async function startController(options: StartControllerOptions): Promise<
       adapter: options.adapter,
       persistence: options.persistence,
       rosterService,
-      bindings: createMissionBindings(roster, "bootstrap")
+      bindings: createMissionBindings(roster)
     });
     const events = new EventRuntime(
       options.adapter,

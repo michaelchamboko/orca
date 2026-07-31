@@ -89,7 +89,7 @@ export async function verifyControllerRuntime(projectRoot: string): Promise<Cont
   try {
     const response = await fetch(`http://${CONTROLLER_HOST}:${metadata.port}/health`, {
       headers: { authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(500)
+      signal: AbortSignal.timeout(2_000)
     });
     const health = await response.json() as { healthy?: unknown; processIdentity?: unknown; version?: unknown; port?: unknown };
     if (response.ok && health.healthy === true && health.processIdentity === metadata.processIdentity && health.version === metadata.version && health.port === metadata.port) return { running: true, reason: "controller runtime verifier is unavailable" };

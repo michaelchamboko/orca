@@ -88,8 +88,13 @@
 - Live OpenCode SSE is best-effort; the controller drops to polling when SSE
   is unavailable. The reconciliation mutex keeps state consistent under
   polling fallback but adds latency.
-- Real OpenCode five-session acceptance is not yet automated; the 5% gap
-  remains until `ORCA_REAL_E2E=1` is wired with a real OpenCode backend.
+- The live OpenCode five-session harness is implemented (`tests/e2e-real/real.test.ts`
+  gated by `ORCA_REAL_E2E=1` + `ORCA_LIVE_WORKTREE`) but remains unexecuted —
+  every run to date is skipped at `describe.skip` because a real OpenCode
+  server with five manually paired sessions has not yet been available in CI
+  or local execution. `scripts/verify-release.cjs` validates the prerequisites
+  and exits `2` without live variables, so a release cannot claim live
+  success until a five-session mission is observed end-to-end.
 - Worker contract violations after the first repair attempt immediately
   block the task. Repeated contract violations across gates indicate either a
   role profile drift or a model capability regression.

@@ -47,6 +47,13 @@ describe("RosterService", () => {
     await expect(service.assertCurrent()).rejects.toThrow("roster drift");
   });
 
+  it("does not treat a title-only session change as roster drift", async () => {
+    await service.pair();
+    adapter.replaceSession({ ...session("s-3", 3), title: "Renamed tab" });
+
+    await expect(service.assertCurrent()).resolves.toBeDefined();
+  });
+
   it("rejects closed sessions while pairing", async () => {
     adapter.replaceSession({ ...session("s-4", 4), status: "closed" });
 

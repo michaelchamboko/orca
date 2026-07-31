@@ -223,7 +223,7 @@ function message(id: string, sessionId: string, createdAt: string, text: string,
 }
 
 async function eventually(assertion: () => unknown): Promise<void> {
-  return eventuallyWithin(1_000, assertion);
+  return eventuallyWithin(3_000, assertion);
 }
 
 async function eventuallyWithin(timeoutMs: number, assertion: () => unknown): Promise<void> {

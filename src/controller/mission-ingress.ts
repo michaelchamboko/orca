@@ -7,8 +7,7 @@ import { RosterService } from "../pairing/roster-service.js";
 import type { WorkflowPersistence } from "./workflow-persistence.js";
 import { captureProvisionalDispatchBaseline } from "./workspace-baseline.js";
 import { DispatchOutbox } from "./dispatch-outbox.js";
-
-const TASK_TIMEOUT_MS = 10 * 60_000;
+import { createMissionBindings, type MissionTaskContext } from "./mission-context.js";
 
 export class MissionIngress {
   private startupCutoff: Date | undefined;
@@ -72,30 +71,37 @@ export class MissionIngress {
     try {
       const planner = bindingFor(current, "planner");
       const missionId = stableId("mission", current.rosterId, message.id);
-      const taskId = stableId("task", current.rosterId, message.id);
-      const dispatchKey = stableId("dispatch", current.rosterId, message.id);
-      const promptMessageId = stableId("orca-prompt", current.rosterId, message.id);
+      const bindings = createMissionBindings(current);
+      const taskContext: MissionTaskContext = {
+        objective,
+        sourceWorkspaceFingerprint: baseline.sourceWorkspaceFingerprint
+      };
+      const descriptor = bindings.nextTaskForRole("planner", missionId, 1, taskContext);
       const envelope: TaskEnvelope = {
-        schemaVersion: "1.0", missionId, taskId, role: "planner", objective,
-        acceptanceCriteria: ["Return a valid Planner structured result."],
-        constraints: ["No file-writing authority.", "Do not execute arbitrary commands."],
-        requiredEvidence: ["summary", "files", "commands", "tests", "risk_summary", "recommended_next_action"],
-        parentTaskIds: [], attempt: 1, projectRoot: current.projectRoot, baseCommit: baseline.baseCommit,
-        sourceWorkspaceFingerprint: baseline.sourceWorkspaceFingerprint, createdAt: new Date().toISOString(), timeoutMs: TASK_TIMEOUT_MS
+        ...descriptor.envelope,
+        projectRoot: current.projectRoot,
+        baseCommit: baseline.baseCommit
       };
       this.persistence.createMissionTaskAndDispatch({
-        mission: { missionId, rosterId: current.rosterId, objective, sourceSessionMessageId: message.id, state: "planning" },
-        task: { envelope, targetSessionId: planner.sessionId, controllerPromptMessageId: promptMessageId },
+        mission: {
+          missionId,
+          rosterId: current.rosterId,
+          objective,
+          sourceSessionMessageId: message.id,
+          state: "planning",
+          payload: { objective, sourceWorkspaceFingerprint: baseline.sourceWorkspaceFingerprint }
+        },
+        task: { envelope, targetSessionId: planner.sessionId, controllerPromptMessageId: descriptor.promptMessageId },
         dispatch: {
-          dispatchKey,
+          dispatchKey: descriptor.dispatchKey,
           targetRole: "planner",
           targetSessionId: planner.sessionId,
           capturedModel: { ...planner.model },
-          promptMessageId,
-          taskId,
+          promptMessageId: descriptor.promptMessageId,
+          taskId: descriptor.envelope.taskId,
           purpose: "worker_task",
           parentPromptMessageId: null,
-          promptPayload: { kind: "worker_task", objective, envelope }
+          promptPayload: { ...descriptor.promptPayload, envelope }
         },
         snapshot: { snapshotId: stableId("snapshot", current.rosterId, message.id), missionId, projectRoot: current.projectRoot, fingerprint: baseline.sourceWorkspaceFingerprint, payload: baseline.payload }
       });

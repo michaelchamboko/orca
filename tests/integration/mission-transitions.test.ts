@@ -8,6 +8,7 @@ import { SqlitePersistence } from "../../src/persistence/sqlite.js";
 import { FakeOpenCodeAdapter } from "../../src/integrations/opencode/fake.js";
 import type { OpenCodeSession } from "../../src/integrations/opencode/types.js";
 import type { PairedRoster, Role, TaskEnvelope } from "../../src/domain/types.js";
+import type { MissionTaskContext } from "../../src/controller/mission-context.js";
 
 const roots: string[] = [];
 const stores: SqlitePersistence[] = [];
@@ -104,14 +105,15 @@ function setup() {
       if (!binding) throw new Error("missing binding");
       return { sessionId: binding.sessionId, agentName: binding.agentName, model: binding.model };
     },
-    nextTaskForRole: (role: Role, attempt: number) => {
+    nextTaskForRole: (role: Role, missionId: string, attempt: number, context: MissionTaskContext) => {
       taskCounter += 1;
       const taskId = `task-${taskCounter}`;
       const binding = roster.bindings.find((b) => b.role === role);
       if (!binding) throw new Error("missing binding");
-      const envelope = makeEnvelope(role, taskId, attempt);
+      const envelope = { ...makeEnvelope(role, taskId, attempt), missionId, objective: context.objective };
       return {
         envelope,
+        promptPayload: { kind: "worker_task", objective: context.objective },
         targetSessionId: binding.sessionId,
         capturedModel: binding.model,
         promptMessageId: `orca-prompt-${taskId}`,
