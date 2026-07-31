@@ -40,7 +40,7 @@ export class RealOpenCodeAdapter implements OpenCodeLiveAdapter {
 
   async listSessions(projectRoot?: string): Promise<OpenCodeSession[]> {
     const sessions = await this.json<unknown[]>(pathWithDirectory("/session", projectRoot));
-    return sessions.map((session, index) => toSession(session, index, this.baseUrl, projectRoot));
+    return sessions.map((session, index) => toSession(session, index, this.baseUrl));
   }
 
   async getSessionModel(sessionId: string): Promise<ModelRef> {
@@ -159,9 +159,9 @@ function pathWithDirectory(path: string, directory: string | undefined): string 
   return directory ? `${path}?directory=${encodeURIComponent(directory)}` : path;
 }
 
-function toSession(value: unknown, index: number, baseUrl: string, projectRoot?: string): OpenCodeSession {
+function toSession(value: unknown, index: number, baseUrl: string): OpenCodeSession {
   const session = object(value);
-  return { id: string(session.id), position: (index + 1) as 1 | 2 | 3 | 4 | 5, serverBaseUrl: baseUrl, projectRoot: string(session.directory, projectRoot ?? ""), model: toModel(session), title: string(session.title), status: string(session.status, "idle"), inFlightToolCalls: number(session.inFlightToolCalls), lastActivity: sessionActivity(session) };
+  return { id: string(session.id), position: (index + 1) as 1 | 2 | 3 | 4 | 5, serverBaseUrl: baseUrl, projectRoot: string(session.directory), model: toModel(session), title: string(session.title), status: string(session.status, "idle"), inFlightToolCalls: number(session.inFlightToolCalls), lastActivity: sessionActivity(session) };
 }
 
 function sessionActivity(session: Record<string, unknown>): string | undefined {

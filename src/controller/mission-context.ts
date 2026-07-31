@@ -192,7 +192,7 @@ export function buildMissionContext(options: {
  * The mission id is supplied at call time (`nextTaskForRole(role, missionId, attempt, context)`)
  * so the same bindings can serve every mission in the controller's lifetime and
  * every dispatched task, decision prompt, dispatch key, and snapshot references
- * the actual mission id — never a synthetic placeholder such as `"bootstrap"`.
+ * the actual mission id ΓÇö never a synthetic placeholder such as `"bootstrap"`.
  *
  * Each role requires the upstream context required to do useful work; missing
  * required context throws `MissionContextError` so dispatch fails fast instead

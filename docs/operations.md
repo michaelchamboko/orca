@@ -22,12 +22,59 @@ node dist/cli.js pair
 node dist/cli.js controller start
 ```
 
+## Local launcher
+
+For a gated localhost dashboard, run from the Git worktree root selected in OpenCode:
+
+```powershell
+node dist\cli.js ui --server http://127.0.0.1:4096
+```
+
+Use `--no-open` to print the one-time localhost URL without opening a browser.
+The launcher binds to `127.0.0.1` on an ephemeral port and accepts only
+standalone OpenCode origins of the form `http://127.0.0.1:<port>`.
+
+The UI flow is fixed:
+
+1. Install ORCA role and skill assets.
+2. Restart OpenCode if the install changed any asset, then relaunch the UI.
+3. Assign one idle OpenCode session to each fixed role:
+   Orchestrator, Planner, Builder, Reviewer, Tester.
+4. Pair the roster.
+5. Start ORCA.
+
+The mission objective is still entered in the assigned Orchestrator OpenCode
+session. The UI has no mission prompt box, model picker, workflow editor,
+credential field, or project folder picker.
+
+The existing CLI remains the recovery path:
+
+```powershell
+node dist\cli.js doctor --server http://127.0.0.1:4096
+node dist\cli.js pair --server http://127.0.0.1:4096
+node dist\cli.js status
+node dist\cli.js controller start
+node dist\cli.js controller status
+node dist\cli.js controller stop
+```
+
+Closing the browser does not stop ORCA. Use the UI Stop button for a
+UI-owned controller, or run `swarmctl controller stop`. Ctrl+C in the
+foreground launcher stops the dashboard and its owned controller cleanly.
+
+Pairing and controller state are stored under `.orca\orca.db`. Controller
+runtime metadata and token files are stored under `.orca\controller.json` and
+`.orca\controller-token`.
+
 ## Health and readiness
 
 - `GET /health` returns liveness only: process identity, version, port, binding count, OpenCode health, and binding freshness. No readiness or workflow detail is exposed to avoid leaking credentials or prompts.
 - `GET /status` returns the operational readiness snapshot: active mission, current task role/state, pending dispatch count, event-stream connection state, polling fallback flag, roster freshness, control-plane freshness, and the last redacted failure code.
 - Both endpoints require the bearer token persisted in `.orca/controller-token`. The token is locked down to the operating system user on POSIX (chmod 600) and to the active Windows user via `icacls`.
 - `swarmctl status` and `swarmctl controller status` surface the same health/readiness snapshot via the CLI.
+
+The launcher never exposes OpenCode credentials or controller tokens in HTML,
+JavaScript state, URLs, API responses, SQLite rows, or logs.
 
 ## Restart and recovery
 
@@ -72,6 +119,21 @@ Only after these checks pass does the script run `verify:95` followed by `pnpm.c
 The real OpenCode five-session acceptance (`tests/e2e-real/real.test.ts`) opens `.orca/orca.db` (it refuses to run when a root-level `state.sqlite` is present or `.orca/orca.db` is missing), requires an existing manually paired roster of exactly five sessions pointing at the worktree with non-empty models, fails fast on reserved markers in the objective or an existing `docs/orca-live-acceptance-sentinel.md`, refuses to call `RosterService.pair()`, and bounds every role wait and the whole mission. The Builder — not the test harness — creates the sentinel file with the unique run id; the test then verifies Builder evidence names the sentinel, the file contains the run id, only the Builder changed project files, the durable mission traversed every gate, and every dispatch used a paired model.
 
 `pnpm.cmd run verify` is an alias for `verify:95` and excludes the live suite by default.
+
+```powershell
+node node_modules\vitest\vitest.mjs run tests\unit\launcher-api.test.ts tests\unit\cli.test.ts tests\unit\roster-service.test.ts tests\contract\opencode-live-adapter.test.ts tests\contract\controller-start.test.ts
+node node_modules\typescript\bin\tsc -p tsconfig.json --noEmit
+pnpm.cmd run lint
+pnpm.cmd run build
+node dist\cli.js ui --help
+pnpm.cmd run verify:95
+pnpm.cmd run verify:release
+```
+
+`verify:release` remains the live OpenCode gate. No release claim is valid until
+a fresh five-session standalone OpenCode receipt proves fixed roles, unchanged
+models, full role execution, a correction loop, restart recovery, truthful
+status, explicit completion, and clean Stop.
 
 ## Live validation runbook
 

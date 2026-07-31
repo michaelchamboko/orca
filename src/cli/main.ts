@@ -2,15 +2,16 @@ import { Command } from "commander";
 import packageJson from "../../package.json" with { type: "json" };
 import { fileURLToPath } from "node:url";
 import { runConfiguredDoctor } from "./doctor.js";
-import { mkdirSync } from "node:fs";
-import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { resolveOpenCodeConnectionConfig } from "../config/opencode-auth.js";
 import { RealOpenCodeAdapter } from "../integrations/opencode/real.js";
+import { openBrowser } from "../launcher/browser.js";
+import { resolveCanonicalProjectRoot, validateLoopbackOpenCodeOrigin } from "../launcher/project.js";
+import { startLauncherUi } from "../launcher/server.js";
 import { selectFiveSessions } from "../pairing/interactive.js";
 import { RosterService } from "../pairing/roster-service.js";
 import { formatRosterStatus, readRosterStatus } from "../pairing/status.js";
-import { SqlitePersistence } from "../persistence/sqlite.js";
+import { openProjectPersistence } from "../persistence/project.js";
 import { installRoleProfiles } from "../roles/installer.js";
 import { requireVerifiedRoleProfileActivation } from "../roles/activation.js";
 import { roleProfiles } from "../roles/profiles.js";
@@ -21,9 +22,14 @@ export interface ServerCommandOptions {
   server?: string;
 }
 
+export interface UiCommandOptions extends ServerCommandOptions {
+  open?: boolean;
+}
+
 export interface CliHandlers {
   doctor(options: ServerCommandOptions): void | Promise<void>;
   pair(options: ServerCommandOptions): void | Promise<void>;
+  ui(options: UiCommandOptions): void | Promise<void>;
   status(): void | Promise<void>;
   controllerStart(options: { daemon?: boolean }): void | Promise<void>;
   controllerStop(): void | Promise<void>;
@@ -64,6 +70,13 @@ export function buildCliProgram(handlers: Partial<CliHandlers> = {}): Command {
     .action((options: ServerCommandOptions) => (handlers.pair ?? runConfiguredPair)(options));
 
   program
+    .command("ui")
+    .description("start the localhost ORCA launcher dashboard")
+    .option("--server <url>", "OpenCode server URL")
+    .option("--no-open", "print the launcher URL without opening a browser")
+    .action((options: UiCommandOptions) => (handlers.ui ?? runConfiguredUi)(options));
+
+  program
     .command("status")
     .description("show the current ORCA pairing and controller status")
     .action(() => (handlers.status ?? runConfiguredStatus)());
@@ -95,7 +108,7 @@ async function runConfiguredControllerStart(options: { daemon?: boolean }): Prom
   if (options.daemon) throw new Error("controller daemon mode is not implemented; run foreground mode without --daemon");
   const projectRoot = process.cwd();
   const connection = await resolveOpenCodeConnectionConfig();
-  const persistence = openPersistence(projectRoot);
+  const persistence = openProjectPersistence(projectRoot);
   try {
     const roster = persistence.getCurrentRoster();
     const controllerConnection = { ...connection, baseUrl: roster?.serverBaseUrl ?? connection.baseUrl };
@@ -134,7 +147,7 @@ async function runConfiguredPair(options: ServerCommandOptions): Promise<void> {
     const selected = await selectFiveSessions(await adapter.listSessions(), projectRoot, (question) => readline.question(question), (line) => process.stdout.write(`${line}\n`));
     process.stdout.write(`${formatPairConfirmation(selected)}\n`);
     if ((await readline.question("Confirm this exact roster before saving? [y/N] ")).trim().toLowerCase() !== "y") throw new Error("pairing cancelled");
-    const persistence = openPersistence(projectRoot);
+    const persistence = openProjectPersistence(projectRoot);
     try {
       const roster = await new RosterService(adapter, persistence).pairSelected(selected);
       process.stdout.write(`Paired roster ${roster.rosterId}\n`);
@@ -148,7 +161,7 @@ async function runConfiguredPair(options: ServerCommandOptions): Promise<void> {
 
 async function runConfiguredStatus(): Promise<void> {
   const projectRoot = process.cwd();
-  const persistence = openPersistence(projectRoot);
+  const persistence = openProjectPersistence(projectRoot);
   try {
     const roster = persistence.getCurrentRoster();
     let adapter: RealOpenCodeAdapter | undefined;
@@ -166,14 +179,34 @@ async function runConfiguredStatus(): Promise<void> {
   }
 }
 
-function openPersistence(projectRoot: string): SqlitePersistence {
-  const directory = join(projectRoot, ".orca");
-  mkdirSync(directory, { recursive: true });
-  return new SqlitePersistence({ path: join(directory, "orca.db") });
-}
-
 export function formatPairConfirmation(sessions: readonly { id: string; title: string; model: { providerId: string; modelId: string } }[]): string {
   return ["Position | Role | Title | Session ID | Model", ...sessions.map((session, index) => `${index + 1} | ${roleProfiles[index]?.role ?? "unknown"} | ${session.title} | ${session.id.slice(0, 8)} | ${session.model.providerId}/${session.model.modelId}`)].join("\n");
+}
+
+async function runConfiguredUi(options: UiCommandOptions): Promise<void> {
+  const projectRoot = await resolveCanonicalProjectRoot(process.cwd());
+  const requestedOrigin = validateLoopbackOpenCodeOrigin(options.server ?? process.env.OPENCODE_SERVER_URL ?? "http://127.0.0.1:4096");
+  const connection = await resolveOpenCodeConnectionConfig({ baseUrl: requestedOrigin });
+  const opencodeOrigin = validateLoopbackOpenCodeOrigin(connection.baseUrl);
+  const launcher = await startLauncherUi({
+    projectRoot,
+    opencodeOrigin,
+    adapter: new RealOpenCodeAdapter({ ...connection, baseUrl: opencodeOrigin }),
+    version: getVersion()
+  });
+  let shuttingDown = false;
+  const shutdown = async (): Promise<void> => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    await launcher.stop();
+  };
+  process.once("SIGINT", () => { void shutdown().then(() => { process.exitCode = 0; }); });
+  process.once("SIGTERM", () => { void shutdown().then(() => { process.exitCode = 0; }); });
+  process.stdout.write(`ORCA launcher: ${launcher.url}\n`);
+  if (options.open !== false && !openBrowser(launcher.url)) {
+    process.stdout.write("Browser launch failed; open the printed URL manually.\n");
+  }
+  await new Promise<void>(() => {});
 }
 
 

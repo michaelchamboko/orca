@@ -120,7 +120,7 @@ function fingerprintFor(sessions: readonly OpenCodeSession[]): string {
   return sha256(JSON.stringify({
     serverBaseUrl: ordered[0]?.serverBaseUrl,
     projectRoot: ordered[0]?.projectRoot,
-    sessions: ordered.map((session) => ({ id: session.id, title: session.title, providerId: session.model.providerId, modelId: session.model.modelId }))
+    sessions: ordered.map((session) => ({ id: session.id, providerId: session.model.providerId, modelId: session.model.modelId }))
   }));
 }
 

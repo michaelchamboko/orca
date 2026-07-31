@@ -57,3 +57,15 @@ is an alias for `verify:95` (no live suite).
 - `docs/test-evidence.md` — empirical test evidence per remediation task with commit-pinned command output.
 - `docs/threat-model.md` — security and reliability model.
 - `docs/opencode-compatibility.md` — OpenCode 1.18.3 contract map.
+
+## Local launcher
+
+After building, run the gated localhost dashboard from the Git worktree root:
+
+```powershell
+node dist\cli.js ui --server http://127.0.0.1:4096
+```
+
+The dashboard installs role assets, assigns the five fixed roles to existing
+OpenCode sessions, pairs the roster, and starts a UI-owned controller. Use
+`--no-open` to print the one-time URL without opening a browser.

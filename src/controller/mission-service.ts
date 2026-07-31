@@ -173,7 +173,7 @@ export class MissionService {
           targetSessionId: next.targetSessionId,
           capturedModel: next.capturedModel,
           promptMessageId: next.promptMessageId,
-          promptPayload: next.promptPayload
+          promptPayload: { ...next.promptPayload, envelope: next.envelope }
         });
         pendingDispatchKey = next.dispatchKey;
         taskCreated = { taskId: next.envelope.taskId, role: nextRole, envelope: next.envelope, targetSessionId: next.targetSessionId, capturedModel: next.capturedModel, promptMessageId: next.promptMessageId, dispatchKey: next.dispatchKey };
@@ -291,7 +291,7 @@ export class MissionService {
           targetSessionId: next.targetSessionId,
           capturedModel: next.capturedModel,
           promptMessageId: next.promptMessageId,
-          promptPayload: next.promptPayload
+          promptPayload: { ...next.promptPayload, envelope: next.envelope }
         });
         this.persistence.recordMissionEvent(action.missionId, next.envelope.taskId, "task.correction", { role: correctionRole, dispatchKey: next.dispatchKey, attempt: priorAttempts + 1, objective: next.envelope.objective, sourceWorkspaceFingerprint: next.envelope.sourceWorkspaceFingerprint });
       });

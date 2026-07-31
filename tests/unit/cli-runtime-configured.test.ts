@@ -52,6 +52,34 @@ vi.mock("../../src/persistence/sqlite.js", () => ({
   }
 }));
 
+vi.mock("../../src/persistence/project.js", () => ({
+  openProjectPersistence: () => new (class {
+    public close = vi.fn();
+    public getCurrentRoster = sqliteCurrentRoster;
+
+    public constructor() {
+      sqliteInstances.push({ close: this.close, getCurrentRoster: this.getCurrentRoster });
+    }
+  })()
+}));
+
+vi.mock("../../src/launcher/browser.js", () => ({
+  openBrowser: vi.fn(() => true)
+}));
+
+vi.mock("../../src/launcher/project.js", () => ({
+  resolveCanonicalProjectRoot: async () => process.cwd(),
+  validateLoopbackOpenCodeOrigin: (value: string) => value.replace(/\/+$/, "")
+}));
+
+vi.mock("../../src/launcher/server.js", () => ({
+  startLauncherUi: vi.fn(async () => ({
+    url: "http://127.0.0.1:4500/#nonce=test",
+    origin: "http://127.0.0.1:4500",
+    stop: vi.fn()
+  }))
+}));
+
 vi.mock("../../src/roles/installer.js", () => ({
   installRoleProfiles: (...args: unknown[]) => installRoleProfiles(...args)
 }));

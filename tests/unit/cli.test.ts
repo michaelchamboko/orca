@@ -36,7 +36,7 @@ describe("buildCliProgram", () => {
     const program = buildCliProgram();
 
     expect(program.commands.map((command) => command.name())).toEqual(
-      expect.arrayContaining(["doctor", "pair", "status", "controller"])
+      expect.arrayContaining(["doctor", "pair", "ui", "status", "controller"])
     );
     expect(program.commands.find((command) => command.name() === "controller")?.commands.map((command) => command.name())).toEqual(expect.arrayContaining(["start", "stop", "status"]));
 
@@ -76,5 +76,16 @@ describe("buildCliProgram", () => {
     await program.parseAsync(["node", "swarmctl", "controller", "status"], { from: "node" });
 
     expect(calls).toEqual(["start", "stop", "status"]);
+  });
+
+  test("routes the ui command to its configured handler", async () => {
+    const calls: unknown[] = [];
+    const program = buildCliProgram({
+      ui: async (options) => { calls.push(options); }
+    });
+
+    await program.parseAsync(["node", "swarmctl", "ui", "--server", "http://127.0.0.1:4096", "--no-open"], { from: "node" });
+
+    expect(calls).toEqual([{ server: "http://127.0.0.1:4096", open: false }]);
   });
 });

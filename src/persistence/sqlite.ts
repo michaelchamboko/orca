@@ -172,6 +172,7 @@ export interface ApprovalInput {
   taskId?: string;
   decision: "approved" | "rejected";
   reason?: string;
+  gate?: string;
 }
 
 export interface ApprovalRecord extends Omit<ApprovalInput, "taskId" | "reason"> {
@@ -616,8 +617,8 @@ export class SqlitePersistence {
     if (result.changes === 0) throw new Error(`task not consumed: ${taskId}`);
   }
 
-  public supersedeApprovalsBefore(missionId: string, gate: string, timestamp: string = nowIso()): number {
-    const result = this.database.prepare(`UPDATE orchestrator_approvals SET superseded_at = @timestamp WHERE mission_id = @missionId AND gate = @gate AND superseded_at IS NULL`).run({ missionId, gate, timestamp });
+  public supersedeApprovalsBefore(missionId: string, gate: string, timestamp: string = nowIso(), preserveApprovalId?: string): number {
+    const result = this.database.prepare(`UPDATE orchestrator_approvals SET superseded_at = @timestamp WHERE mission_id = @missionId AND gate = @gate AND superseded_at IS NULL AND (@preserveApprovalId IS NULL OR approval_id != @preserveApprovalId)`).run({ missionId, gate, timestamp, preserveApprovalId: preserveApprovalId ?? null });
     return result.changes;
   }
 
@@ -646,10 +647,10 @@ export class SqlitePersistence {
 
   public getCurrentApproval(missionId: string, gate: string): ApprovalRecord | null {
     const row = this.database.prepare(`
-      SELECT approval_id, mission_id, task_id, decision, reason, created_at FROM orchestrator_approvals WHERE mission_id = @missionId AND gate = @gate AND superseded_at IS NULL ORDER BY created_at DESC LIMIT 1
-    `).get({ missionId, gate }) as { approval_id: string; mission_id: string; task_id: string | null; decision: "approved" | "rejected"; reason: string | null; created_at: string } | undefined;
+      SELECT approval_id, mission_id, task_id, decision, reason, gate, created_at FROM orchestrator_approvals WHERE mission_id = @missionId AND gate = @gate AND superseded_at IS NULL ORDER BY created_at DESC LIMIT 1
+    `).get({ missionId, gate }) as { approval_id: string; mission_id: string; task_id: string | null; decision: "approved" | "rejected"; reason: string | null; gate: string | null; created_at: string } | undefined;
     if (!row) return null;
-    return { approvalId: row.approval_id, missionId: row.mission_id, taskId: row.task_id, decision: row.decision, reason: row.reason, createdAt: row.created_at };
+    return { approvalId: row.approval_id, missionId: row.mission_id, taskId: row.task_id, decision: row.decision, reason: row.reason, gate: row.gate ?? undefined, createdAt: row.created_at };
   }
 
   public enqueueCheckIntent(input: {
@@ -1057,8 +1058,8 @@ export class SqlitePersistence {
   }
 
   public getApprovals(missionId: string): ApprovalRecord[] {
-    const rows = this.database.prepare(`SELECT approval_id, mission_id, task_id, decision, reason, created_at FROM orchestrator_approvals WHERE mission_id = @missionId ORDER BY created_at ASC`).all({ missionId }) as Array<{ approval_id: string; mission_id: string; task_id: string | null; decision: "approved" | "rejected"; reason: string | null; created_at: string }>;
-    return rows.map((row) => ({ approvalId: row.approval_id, missionId: row.mission_id, taskId: row.task_id, decision: row.decision, reason: row.reason, createdAt: row.created_at }));
+    const rows = this.database.prepare(`SELECT approval_id, mission_id, task_id, decision, reason, gate, created_at FROM orchestrator_approvals WHERE mission_id = @missionId ORDER BY created_at ASC`).all({ missionId }) as Array<{ approval_id: string; mission_id: string; task_id: string | null; decision: "approved" | "rejected"; reason: string | null; gate: string | null; created_at: string }>;
+    return rows.map((row) => ({ approvalId: row.approval_id, missionId: row.mission_id, taskId: row.task_id, decision: row.decision, reason: row.reason, gate: row.gate ?? undefined, createdAt: row.created_at }));
   }
 
   public saveWorkspaceSnapshot(input: WorkspaceSnapshotInput): WorkspaceSnapshot {

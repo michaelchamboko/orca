@@ -10,8 +10,13 @@ declare module "better-sqlite3" {
     all(params?: TParams): TResult[];
   }
 
+  export interface Options {
+    readonly?: boolean;
+    fileMustExist?: boolean;
+  }
+
   export class Database {
-    constructor(filename: string);
+    constructor(filename: string, options?: Options);
 
     pragma(pragma: string): void;
     exec(sql: string): void;
