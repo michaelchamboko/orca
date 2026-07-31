@@ -183,11 +183,23 @@ export function formatPairConfirmation(sessions: readonly { id: string; title: s
   return ["Position | Role | Title | Session ID | Model", ...sessions.map((session, index) => `${index + 1} | ${roleProfiles[index]?.role ?? "unknown"} | ${session.title} | ${session.id.slice(0, 8)} | ${session.model.providerId}/${session.model.modelId}`)].join("\n");
 }
 
+export function ensureLoopbackBypassesProxy(loopbackOrigin: string): void {
+  const hostname = new URL(loopbackOrigin).hostname;
+  if (hostname !== "127.0.0.1" && hostname !== "::1" && hostname !== "localhost") return;
+  const existing = (process.env.NO_PROXY ?? process.env.no_proxy ?? "").split(",").map((entry) => entry.trim()).filter(Boolean);
+  const targets = ["127.0.0.1", "localhost", "::1"];
+  const merged = Array.from(new Set([...existing, ...targets]));
+  const value = merged.join(",");
+  process.env.NO_PROXY = value;
+  process.env.no_proxy = value;
+}
+
 async function runConfiguredUi(options: UiCommandOptions): Promise<void> {
   const projectRoot = await resolveCanonicalProjectRoot(process.cwd());
   const requestedOrigin = validateLoopbackOpenCodeOrigin(options.server ?? process.env.OPENCODE_SERVER_URL ?? "http://127.0.0.1:4096");
   const connection = await resolveOpenCodeConnectionConfig({ baseUrl: requestedOrigin });
   const opencodeOrigin = validateLoopbackOpenCodeOrigin(connection.baseUrl);
+  ensureLoopbackBypassesProxy(opencodeOrigin);
   const launcher = await startLauncherUi({
     projectRoot,
     opencodeOrigin,
