@@ -69,3 +69,30 @@ node dist\cli.js ui --server http://127.0.0.1:4096
 The dashboard installs role assets, assigns the five fixed roles to existing
 OpenCode sessions, pairs the roster, and starts a UI-owned controller. Use
 `--no-open` to print the one-time URL without opening a browser.
+
+`swarmctl ui` performs an authenticated `/global/health` preflight before
+binding. On transport failure, timeout, or `healthy: false` the command
+exits with `OPENCODE_UNAVAILABLE` and does not start a launcher. HTTP 401
+from the preflight keeps the specific authentication diagnostic.
+
+### Two-terminal startup order
+
+ORCA talks to a supported standalone OpenCode server, not to OpenCode
+Desktop's private, ephemeral sidecar. OpenCode Desktop being open is not a
+substitute. Start the standalone server in terminal A and run ORCA in
+terminal B; both terminals must agree on the fixed port and the
+`OPENCODE_SERVER_USERNAME` / `OPENCODE_SERVER_PASSWORD` environment
+variables.
+
+```powershell
+# Terminal A — supported standalone server (terminal-scoped credentials).
+$env:OPENCODE_SERVER_USERNAME = "opencode"
+$env:OPENCODE_SERVER_PASSWORD = "<fresh local-only password>"
+opencode serve --hostname 127.0.0.1 --port 59711
+
+# Terminal B — verify reachability and credentials before launching the UI.
+$env:OPENCODE_SERVER_USERNAME = "opencode"
+$env:OPENCODE_SERVER_PASSWORD = "<same fresh local-only password>"
+node dist\cli.js doctor --server http://127.0.0.1:59711
+node dist\cli.js ui --server http://127.0.0.1:59711
+```

@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { runConfiguredDoctor } from "./doctor.js";
 import { createInterface } from "node:readline/promises";
 import { resolveOpenCodeConnectionConfig } from "../config/opencode-auth.js";
-import { RealOpenCodeAdapter } from "../integrations/opencode/real.js";
+import { OpenCodeHttpError, RealOpenCodeAdapter } from "../integrations/opencode/real.js";
 import { openBrowser } from "../launcher/browser.js";
 import { resolveCanonicalProjectRoot, validateLoopbackOpenCodeOrigin } from "../launcher/project.js";
 import { startLauncherUi } from "../launcher/server.js";
@@ -43,6 +43,55 @@ export class OrcaNotConfiguredError extends Error {
   constructor(command: string) {
     super(`${command} is not configured in this ORCA build`);
     this.name = "OrcaNotConfiguredError";
+  }
+}
+
+export class OpenCodeUnavailableError extends Error {
+  public readonly code = "OPENCODE_UNAVAILABLE";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "OpenCodeUnavailableError";
+  }
+}
+
+export function formatOpenCodeUnavailableMessage(origin: string): string {
+  const redactedOrigin = redactOrigin(origin);
+  return [
+    "OPENCODE_UNAVAILABLE: failed to verify an authenticated OpenCode standalone server.",
+    `OpenCode origin: ${redactedOrigin}`,
+    "Start the supported standalone server (terminal A):",
+    "  opencode serve --hostname 127.0.0.1 --port 59711",
+    "Then verify reachability and credentials (terminal B):",
+    "  node dist\\cli.js doctor --server http://127.0.0.1:59711",
+    "Launch the UI only after doctor reports reachable and authenticated.",
+    "OpenCode Desktop being open is not a substitute for the supported standalone server."
+  ].join("\n");
+}
+
+function redactOrigin(origin: string): string {
+  const withStrippedCredentials = origin.replace(/\/\/[^@/]+@/, "//***@");
+  return withStrippedCredentials.replace(/\/+$/, "");
+}
+
+export interface OpenCodePreflight {
+  adapter: Pick<RealOpenCodeAdapter, "health">;
+}
+
+export async function preflightOpenCodeConnection(preflight: OpenCodePreflight, origin: string): Promise<void> {
+  try {
+    const health = await preflight.adapter.health();
+    if (!health.healthy) {
+      throw new OpenCodeUnavailableError(formatOpenCodeUnavailableMessage(origin));
+    }
+  } catch (error) {
+    if (error instanceof OpenCodeHttpError && error.status === 401) {
+      throw error;
+    }
+    if (error instanceof OpenCodeUnavailableError) {
+      throw error;
+    }
+    throw new OpenCodeUnavailableError(formatOpenCodeUnavailableMessage(origin));
   }
 }
 
@@ -213,10 +262,12 @@ async function runConfiguredUi(options: UiCommandOptions): Promise<void> {
   const connection = await resolveOpenCodeConnectionConfig({ baseUrl: requestedOrigin });
   const opencodeOrigin = validateLoopbackOpenCodeOrigin(connection.baseUrl);
   ensureLoopbackBypassesProxy(opencodeOrigin);
+  const adapter = new RealOpenCodeAdapter({ ...connection, baseUrl: opencodeOrigin });
+  await preflightOpenCodeConnection({ adapter }, opencodeOrigin);
   const launcher = await startLauncherUi({
     projectRoot,
     opencodeOrigin,
-    adapter: new RealOpenCodeAdapter({ ...connection, baseUrl: opencodeOrigin }),
+    adapter,
     version: getVersion()
   });
   let shuttingDown = false;
@@ -235,7 +286,6 @@ async function runConfiguredUi(options: UiCommandOptions): Promise<void> {
 }
 
 async function discoverOpenCodeOrigin(hint: string | undefined): Promise<string | null> {
-  const { OpenCodeHttpError } = await import("../integrations/opencode/real.js");
   const ports = [
     ...(hint ? [Number(new URL(validateLoopbackOpenCodeOrigin(hint)).port)] : []),
     4096, 4097, 4098, 4099, 4100, 4101, 4102, 4103, 4104, 4105,
@@ -286,6 +336,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   void main().catch((error: unknown) => {
     if (error instanceof OrcaNotConfiguredError) {
       process.stderr.write(`${error.code}: ${error.message}\n`);
+      process.exitCode = 1;
+      return;
+    }
+
+    if (error instanceof OpenCodeUnavailableError) {
+      process.stderr.write(`${error.message}\n`);
       process.exitCode = 1;
       return;
     }

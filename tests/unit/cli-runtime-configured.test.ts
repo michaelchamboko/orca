@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
+import { OpenCodeHttpError } from "../../src/integrations/opencode/real.js";
+
 const resolveOpenCodeConnectionConfig = vi.fn();
 const startController = vi.fn();
 const stopController = vi.fn();
@@ -24,6 +26,20 @@ vi.mock("../../src/config/opencode-auth.js", () => ({
 }));
 
 vi.mock("../../src/integrations/opencode/real.js", () => ({
+  OpenCodeHttpError: class OpenCodeHttpError extends Error {
+    public readonly status: number;
+    public constructor(status: number, path: string) {
+      super(status === 401 ? "OpenCode authentication failed (401). Check OPENCODE_SERVER_USERNAME and OPENCODE_SERVER_PASSWORD." : `OpenCode request to ${path} failed with HTTP ${status}.`);
+      this.name = "OpenCodeHttpError";
+      this.status = status;
+    }
+  },
+  OpenCodeTimeoutError: class OpenCodeTimeoutError extends Error {
+    public constructor() {
+      super("OpenCode request timed out. Verify that the server is reachable and responsive.");
+      this.name = "OpenCodeTimeoutError";
+    }
+  },
   RealOpenCodeAdapter: class {
     public readonly connection: { baseUrl: string; username: string; password: string };
 
@@ -158,11 +174,11 @@ function resetMocks(): void {
   nextReadlineAnswer = "y";
   vi.clearAllMocks();
 
-  resolveOpenCodeConnectionConfig.mockResolvedValue({
-    baseUrl: "http://127.0.0.1:4096",
+  resolveOpenCodeConnectionConfig.mockImplementation(async (options: { baseUrl?: string } | undefined) => ({
+    baseUrl: options?.baseUrl ?? "http://127.0.0.1:4096",
     username: "operator",
     password: "secret-password"
-  });
+  }));
   startController.mockResolvedValue({
     address: { host: "127.0.0.1", port: 4321 },
     stop: vi.fn()
@@ -299,6 +315,81 @@ describe("configured command runtime", () => {
     expect(readControllerRuntime).toHaveBeenCalledWith(process.cwd());
     expect(readRosterStatus).toHaveBeenCalled();
     expect(writes.join("" )).toContain("FORMATTED:");
+    restore();
+  });
+
+  test("ui command rejects when preflight fetch fails and does not start the launcher", async () => {
+    const { startLauncherUi: startLauncherUiMock } = await import("../../src/launcher/server.js");
+    const { openBrowser: openBrowserMock } = await import("../../src/launcher/browser.js");
+    adapterHealth.mockRejectedValue(new Error("ECONNREFUSED 127.0.0.1:59711"));
+    const { writes, restore } = captureStdoutWrites();
+
+    await expect(parseCommand(["ui", "--server", "http://127.0.0.1:59711"])).rejects.toThrow("OPENCODE_UNAVAILABLE");
+
+    expect(writes.join("" )).not.toContain("ORCA launcher:");
+    expect(startLauncherUiMock).not.toHaveBeenCalled();
+    expect(openBrowserMock).not.toHaveBeenCalled();
+    restore();
+  });
+
+  test("ui command rejects on healthy=false without starting the launcher", async () => {
+    const { startLauncherUi: startLauncherUiMock } = await import("../../src/launcher/server.js");
+    adapterHealth.mockResolvedValue({ healthy: false, version: "1.18.3" });
+
+    await expect(parseCommand(["ui", "--server", "http://127.0.0.1:59711"])).rejects.toThrow("OPENCODE_UNAVAILABLE");
+
+    expect(startLauncherUiMock).not.toHaveBeenCalled();
+  });
+
+  test("ui command rejects on timeout without starting the launcher", async () => {
+    const { startLauncherUi: startLauncherUiMock } = await import("../../src/launcher/server.js");
+    const abortError = new Error("aborted");
+    abortError.name = "AbortError";
+    adapterHealth.mockRejectedValue(abortError);
+
+    await expect(parseCommand(["ui", "--server", "http://127.0.0.1:59711"])).rejects.toThrow("OPENCODE_UNAVAILABLE");
+
+    expect(startLauncherUiMock).not.toHaveBeenCalled();
+  });
+
+  test("ui command preserves the HTTP 401 authentication diagnostic", async () => {
+    const { startLauncherUi: startLauncherUiMock } = await import("../../src/launcher/server.js");
+    adapterHealth.mockRejectedValue(new OpenCodeHttpError(401, "/global/health"));
+
+    await expect(parseCommand(["ui", "--server", "http://127.0.0.1:59711"])).rejects.toThrow(/authentication failed/i);
+
+    expect(startLauncherUiMock).not.toHaveBeenCalled();
+  });
+
+  test("ui command starts the launcher only after a healthy preflight", async () => {
+    const launcherModule = await import("../../src/launcher/server.js");
+    const startLauncherUiMock = vi.mocked(launcherModule.startLauncherUi);
+    let resolveStart: ((value: unknown) => void) | undefined;
+    startLauncherUiMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveStart = () => resolve({ app: {} as never, url: "http://127.0.0.1:4500/#nonce=test", origin: "http://127.0.0.1:4500", stop: vi.fn() });
+        })
+    );
+    adapterHealth.mockResolvedValue({ healthy: true, version: "1.18.3" });
+    const { restore } = captureStdoutWrites();
+
+    const pending = parseCommand(["ui", "--server", "http://127.0.0.1:59711", "--no-open"]);
+    for (let i = 0; i < 10 && !startLauncherUiMock.mock.calls.length; i += 1) {
+      await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
+    }
+    expect(adapterHealth).toHaveBeenCalled();
+    expect(startLauncherUiMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectRoot: expect.any(String),
+        opencodeOrigin: "http://127.0.0.1:59711",
+        adapter: expect.objectContaining({
+          connection: expect.objectContaining({ baseUrl: "http://127.0.0.1:59711" })
+        })
+      })
+    );
+    resolveStart?.(undefined);
+    pending.catch(() => undefined);
     restore();
   });
 });

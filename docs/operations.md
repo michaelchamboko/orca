@@ -34,6 +34,41 @@ Use `--no-open` to print the one-time localhost URL without opening a browser.
 The launcher binds to `127.0.0.1` on an ephemeral port and accepts only
 standalone OpenCode origins of the form `http://127.0.0.1:<port>`.
 
+`swarmctl ui` performs an authenticated `/global/health` preflight before
+binding the dashboard. On transport failure, timeout, or `healthy: false` the
+command exits with `OPENCODE_UNAVAILABLE` and does not start a launcher,
+print a URL, or open a browser. HTTP 401 from the preflight keeps the
+specific authentication diagnostic.
+
+### Two-terminal startup order
+
+ORCA talks to a supported standalone OpenCode server, not to OpenCode
+Desktop's private, ephemeral sidecar. OpenCode Desktop being open is not a
+substitute. Run the standalone server in terminal A and the ORCA CLI in
+terminal B; the two terminals must agree on the fixed port and the
+`OPENCODE_SERVER_USERNAME` / `OPENCODE_SERVER_PASSWORD` environment
+variables.
+
+```powershell
+# Terminal A — supported standalone server (terminal-scoped credentials).
+$env:OPENCODE_SERVER_USERNAME = "opencode"
+$env:OPENCODE_SERVER_PASSWORD = "<fresh local-only password>"
+opencode serve --hostname 127.0.0.1 --port 59711
+
+# Terminal B — verify reachability and credentials before launching the UI.
+$env:OPENCODE_SERVER_USERNAME = "opencode"
+$env:OPENCODE_SERVER_PASSWORD = "<same fresh local-only password>"
+swarmctl doctor --server http://127.0.0.1:59711
+swarmctl ui --server http://127.0.0.1:59711
+```
+
+Credential-matching rule: the credentials in terminal A (the standalone
+server) must match the credentials in terminal B (the ORCA CLI). Wrong
+credentials yield HTTP 401 with a specific authentication diagnostic, not
+`OPENCODE_UNAVAILABLE`. Reuse the existing `--server` argument or the
+`OPENCODE_SERVER_URL` environment variable instead of editing the launcher
+contract.
+
 The UI flow is fixed:
 
 1. Install ORCA role and skill assets.
